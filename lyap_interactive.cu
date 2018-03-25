@@ -5,11 +5,11 @@
 #include <helper_gl.h>
 
 #if defined (__APPLE__) || defined(MACOSX)
-  #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-  #include <GLUT/glut.h>
-  #ifndef glutCloseFunc
-  #define glutCloseFunc glutWMCloseFunc
-  #endif
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#include <GLUT/glut.h>
+#ifndef glutCloseFunc
+#define glutCloseFunc glutWMCloseFunc
+#endif
 #else
 #include <GL/freeglut.h>
 #endif
@@ -24,12 +24,17 @@
 #include <helper_cuda_gl.h>
 #include <helper_functions.h>
 
-#include "real4.h"
-#include "structs.h"
+#include "vec3.hpp"
+#include "quat.hpp"
+#include "color.hpp"
+#include "structs.hpp"
 
 // Image and grid parameters
-const uint imageWidth = 800, imageHeight = 500;
-const dim3 gridSize(imageWidth, imageHeight);
+const uint imageWidth = 256, imageHeight = 256;
+const uint blockSize = 1;
+const dim3 blocks(imageWidth / blockSize, imageHeight / blockSize);
+const dim3 threads(blockSize, blockSize);
+
 const uint windowWidth = imageWidth, windowHeight = imageHeight;
 const uint renderDenominator = 1;
 
@@ -37,66 +42,67 @@ const uint renderDenominator = 1;
 const uint MAX_LIGHTS = 16;
 
 
-LyapParams prm = {
-  .d = 2.10,
-  .settle = 5,
-  .accum = 10,
-  .stepMethod = 3,
-  .nearThreshold = -1.000000,
-  .nearMultiplier = 2.000000,
-  .opaqueThreshold = -1.125000,
-  .chaosThreshold = 100000.000000,
-  .depth = 16.000000,
-  .jitter = 0.500000,
-  .refine = 32.000000,
-  .gradient = 0.010000,
-  .lMin = 0.000000,
-  .lMax = 4.000000
+LyapParams prm;
+LyapCam cam;
+LyapLight lights[MAX_LIGHTS];
+
+unsigned char *sequence;
+
+unsigned int num_lights;
+
+void init_params()
+{
+    prm.d = 2.10;
+    prm.settle = 5;
+    prm.accum = 10;
+    prm.stepMethod = 3;
+    prm.nearThreshold = -1.0;
+    prm.nearMultiplier = 2.0;
+    prm.opaqueThreshold = -1.125;
+    prm.chaosThreshold = 100000.0;
+    prm.depth = 16.0;
+    prm.jitter = 0.5;
+    prm.refine = 32.0;
+    prm.gradient = 0.01;
+    prm.lMin = 0.0;
+    prm.lMax = 4.0;
+
+    sequence = (unsigned char *)"BCABA";
+
+    cam.C = Vec(4.010000f, 4.0f, 4.0f);
+    cam.Q = Quat(0.820473f, -0.339851f, -0.175920f, 0.424708f);
+    cam.M = 0.500000;
+
+    lights[0].C = Vec(5.0f, 7.0f, 3.0f);
+    lights[0].Q = Quat(0.710595f, 0.282082f, -0.512168f, 0.391368f);
+    lights[0].M = 0.500000;
+    lights[0].lightInnerCone = 0.904535f;
+    lights[0].lightOuterCone = 0.816497f;
+    lights[0].lightRange = 1.0;
+    lights[0].ambient = Color(0, 0, 0, 0);
+    lights[0].diffuseColor = Color(0.30, 0.40, 0.50, 1);
+    lights[0].diffusePower = 10.0;
+    lights[0].specularColor = Color(0.90, 0.90, 0.90, 1);
+    lights[0].specularPower = 10.0;
+    lights[0].specularHardness = 10.0;
+    lights[0].chaosColor = Color(0, 0, 1, 0.1);
+
+    lights[1].C = Vec(3, 7, 5);
+    lights[1].Q = Quat(0.039640, 0.840027,-0.538582,-0.052093);
+    lights[1].M = 1.6772;
+    lights[1].lightInnerCone = 0.534489;
+    lights[1].lightOuterCone = 0.388485;
+    lights[1].lightRange = 0.5;
+    lights[1].ambient = Color(0, 0, 0, 0);
+    lights[1].diffuseColor = Color(0.3, 0.374694, 0.2, 1);
+    lights[1].diffusePower = 10.0;
+    lights[1].specularColor = Color(1, 1, 1, 1);
+    lights[1].specularPower = 10.0;
+    lights[1].specularHardness = 10.0;
+    lights[1].chaosColor = Color(0, 0, 1, 1);
+
+    num_lights = 2;
 };
-
-unsigned char *sequence = (unsigned char *)"AAAAAABBBBBBCCCCCCDDDDDD";
-
-
-LyapCam cam = {
-  .C = {4.010000,4.000000,4.000000,0.000000},
-  .Q = {0.820473,-0.339851,-0.175920,0.424708},
-  .M = 0.500000
-};
-
-LyapLight lights[] = {
-    {
-        .C = {5.000000,7.000000,3.000000,0.000000},
-        .Q = {0.710595,0.282082,-0.512168,0.391368},
-        .M = 0.500000,
-        .lightInnerCone = 0.904535,
-        .lightOuterCone = 0.816497,
-        .lightRange = 1.000000,
-        .ambient = {0.000000,0.000000,0.000000,0.000000},
-        .diffuseColor = {0.300000,0.400000,0.500000,0.000000},
-        .diffusePower = 10.000000,
-        .specularColor = {0.900000,0.900000,0.900000,0.000000},
-        .specularPower = 10.000000,
-        .specularHardness = 10.000000,
-        .chaosColor = {0.000000,0.000000,0.000000,0.000000}
-    },
-
-    {
-        .C = {3.000000,7.000000,5.000000,0.000000},
-        .Q = {0.039640,0.840027,-0.538582,-0.052093},
-        .M = 1.677200,
-        .lightInnerCone = 0.534489,
-        .lightOuterCone = 0.388485,
-        .lightRange = 0.500000,
-        .ambient = {0.000000,0.000000,0.000000,0.000000},
-        .diffuseColor = {0.300000,0.374694,0.200000,0.000000},
-        .diffusePower = 10.000000,
-        .specularColor = {1.000000,1.000000,1.000000,0.000000},
-        .specularPower = 10.000000,
-        .specularHardness = 10.000000,
-        .chaosColor = {0.000000,0.000000,0.000000,0.000000}
-    }
-};
-unsigned int num_lights = 2;
 
 // Data transfer of Pixel Buffer Object between CUDA and GL
 GLuint pbo;
@@ -122,106 +128,109 @@ __device__ LyapLight *cudaLights = 0;
 __device__ RGBA *cudaRGBA;
 
 // Device sequence array
-__device__ INT *cudaSeq;
+__device__ Int *cudaSeq;
 
 /**
  * Convert the lyapunov point into a pixel for rendering
  */
-__device__ REAL4 shade(LyapPoint point, LyapCam cam, LyapLight *lights, UINT num_lights)
+__device__ Color shade(LyapPoint point, LyapCam cam, LyapLight *lights, Uint num_lights)
 {
-    REAL4 color = REAL4_init(0,0,0);
+    Color color = Color();
 
     if(!isnan(point.a)) {
-        UINT l;
+        Uint l;
 
         // For each defined light
         for(l=0; l<num_lights; ++l) {
-            REAL4 camV, lightV, diffuse, halfV, specular;
-            REAL lightD2, i, j;
+            Vec camV;
+            Vec lightV, halfV;
+            Color diffuse, specular, phong;
+            Real lightD2, i, j;
 
-            REAL4 P = REAL4_init(point.x, point.y, point.z);
-            REAL4 N = REAL4_init(point.nx, point.ny, point.nz);
-            REAL a = point.a;
-            REAL c = point.c;
+            Vec P = point.P;
+            Vec N = point.N;
+            Real a = point.a;
+            Real c = point.c;
 
-            camV = REAL4_sub(cam.C, P);
-            lightV = REAL4_sub(lights[l].C, P);
-            lightD2 = REAL4_mag2(lightV);
+            camV = cam.C - P;
 
-            // Get the length of lightV (for falloff)
+            // Light vector (from point on surface to light source)
+            lightV = lights[l].C - P;
+
+            // Get the length^2 of lightV (for falloff)
+            lightD2 = lightV.mag2();
+
             // but then normalize lightV.
-            lightV = REAL4_normalize(lightV);
+            lightV.normalize();
 
-            i = REAL4_dot(lightV, N);
-            j = REAL4_dot(lightV, lights[l].V);
+            // i: light vector dot surface normal
+            i = lightV % N;
+
+            // j: light vector dot spotlight cone
+            j = lightV % lights[l].V;
             j = -j;
 
             if (j > lights[l].lightOuterCone) {
-                i = REAL_clamp(i);
-                diffuse = REAL4_scale(lights[l].diffuseColor, i*lights[l].diffusePower);
 
-                halfV = REAL4_normalize(REAL4_add(lightV, camV));
+                // Diffuse component: k * (L.N) * colour
+                i = Vec::clamp(i);
+                diffuse = lights[l].diffuseColor * (i*lights[l].diffusePower);
 
-                i = REAL_clamp(REAL4_dot(N, halfV));
+                // Halfway direction between camera and light, from point on surface
+                halfV = camV + lightV;
+                halfV.normalize();
 
-                i = POWF(i, lights[l].specularHardness);
+                // Specular component: k * (R.N)^alpha * colour
+                // R is natural reflection, which is at 90 degrees to halfV (?)
+                // (or is it?  Hmmm.  https://en.wikipedia.org/wiki/Phong_reflection_model)
+                i = Vec::clamp(N % halfV);
+                i = powf(i, lights[l].specularHardness);
 
-                specular = REAL4_scale(lights[l].specularColor, i*lights[l].specularPower);
+                specular = lights[l].specularColor * (i*lights[l].specularPower);
 
-                lightV = REAL4_add(specular, diffuse);
-
-                lightV = REAL4_scale(lightV, lights[l].lightRange/lightD2);
+                phong = (specular + diffuse) * (lights[l].lightRange/lightD2);
 
                 if ( j < lights[l].lightInnerCone) {
-                    lightV = REAL4_scale(lightV, (j-lights[l].lightOuterCone)/(lights[l].lightInnerCone-lights[l].lightOuterCone));
+                    phong *= ((j-lights[l].lightOuterCone)/(lights[l].lightInnerCone-lights[l].lightOuterCone));
                 }
-                lightV = REAL4_add(lightV, lights[l].ambient);
+                phong += lights[l].ambient;
             }
             else {
-                lightV = lights[l].ambient;
+                phong = lights[l].ambient;
             }
 
             if(c>0.0) {
-                REAL4 chaos;
-                chaos = REAL4_scale(lights[l].chaosColor, 0.1125/LOGF(c));
-                lightV = REAL4_add(lightV, chaos);
+                Color chaos;
+                chaos = lights[l].chaosColor * (0.1125/Vec::logf(c));
+                phong += chaos;
             }
 
-            lightV.w = 1;
-
-            color = REAL4_add(color, lightV);
+            color += phong;
         }
     }
 
     return color;
 }
 
-__device__ static __inline__ INT in_lyap_space(REAL4 P, REAL lmin, REAL lmax)
+__device__ static Real lyap4d(Vec P, Real d, Uint settle, Uint accum, const Int *seq)
 {
-    return ((P.x>=lmin) && (P.x<=lmax) &&
-            (P.y>=lmin) && (P.y<=lmax) &&
-            (P.z>=lmin) && (P.z<=lmax));
-}
-
-__device__ static REAL lyap4d(REAL4 P, REAL d, UINT settle, UINT accum, const INT *seq)
-{
-    REAL abcd[4];
+    Real abcd[4];
     abcd[0] = P.x;
     abcd[1] = P.y;
     abcd[2] = P.z;
     abcd[3] = d;
 
-    //REAL px=P.x-2.0, py=P.y-2.0, pz=P.z-2.0;
+    //Real px=P.x-2.0, py=P.y-2.0, pz=P.z-2.0;
     //  if(SQRTF(px*px + py*py + pz*pz) < 2.0)
     //    return -1;
     //  else
     //    return 0;
 
-    UINT seqi; // Position in the sequence loop
-    UINT n;    // Iteration counter
-    REAL r; // Iteration value
-    REAL v = 0.5; // Iterating value
-    REAL l = 0; // Result accumulator
+    Uint seqi; // Position in the sequence loop
+    Uint n;    // Iteration counter
+    Real r; // Iteration value
+    Real v = 0.5; // Iterating value
+    Real l = 0; // Result accumulator
 
     // Initialise for this pixel
     seqi = 0;
@@ -241,53 +250,48 @@ __device__ static REAL lyap4d(REAL4 P, REAL d, UINT settle, UINT accum, const IN
             v = r * v * (1.0 - v);
             r = r - 2.0 * r * v;
             r = fabs(r);
-            l += LOGF(r);
+            l += Vec::logf(r);
             if(!isfinite(l)) { return NAN; }
         }
     }
 
-    return l/(REAL)accum;
+    return l/(Real)accum;
 }
 
-__device__ static INT raycast(REAL4 *PP,
-                              REAL4 *NP,
-                              REAL *aP,
-                              REAL *cP,
-                              UINT sx, UINT sy,
+__device__ static Int raycast(LyapPoint *point,
+                              Uint sx, Uint sy,
                               LyapCam cam,
                               LyapParams prm,
-                              INT *seq)
+                              Int *seq)
 {
     // Work out the direction vector: start at C (camera), and
     // find the point on the screen plane (in 3D)
-    REAL4 V = REAL4_init(cam.S0.x + cam.SDX.x * sx + cam.SDY.x * sy,
-                         cam.S0.y + cam.SDX.y * sx + cam.SDY.y * sy,
-                         cam.S0.z + cam.SDX.z * sx + cam.SDY.z * sy);
+    Vec V = cam.S0 + cam.SDX * sx + cam.SDY * sy;
 
-    V = REAL4_normalize(V);
-    V = REAL4_scale(V, 1.0/cam.M);
+    V.normalize();
+    V /= cam.M;
 
-    REAL4 P;
-    REAL4 N;
+    Vec P;
+    Vec N;
 
-    REAL a; // high-low alpha
-    REAL c; // chaos alpha
-    REAL l;
+    Real a; // high-low alpha
+    Real c; // chaos alpha
+    Real l;
 
     bool near = false;
-    INT i;
-    REAL t;
+    Int i;
+    Real t;
 
-//REAL thresholdRange = prm.opaqueThreshold - prm.nearThreshold;
+    //Real thresholdRange = prm.opaqueThreshold - prm.nearThreshold;
 
     // Find start and end point of ray within Lyapunov space cube
 
-    REAL t0=MAXFLOAT, t1=0;
+    Real t0=MAXFLOAT, t1=0;
     // Find ray intersection through entire Lyapunov space cube
 
     // First, find values for 't' for intersections with the six infinite
     // planes x=0, x=4, y=0, y=4, z=0, and z=4.
-    REAL ts[6];
+    Real ts[6];
     ts[0] = (V.x!=0.0f) ? ((LMIN-cam.C.x) / V.x) : INFINITY;
     ts[1] = (V.x!=0.0f) ? ((LMAX-cam.C.x) / V.x) : INFINITY;
     ts[2] = (V.y!=0.0f) ? ((LMIN-cam.C.y) / V.y) : INFINITY;
@@ -301,40 +305,40 @@ __device__ static INT raycast(REAL4 *PP,
     // only if the points are equal. So, zero, one or two _unique_
     // intersections will occur. This is because zero, one or two
     // points on a line intersect a cube.
-    INT i0=-1, i1=-1;
+    Int i0=-1, i1=-1;
 
     if(ts[0] != INFINITY) {
-        P = REAL4_extrapolate(cam.C, V, ts[0]);
+        P = cam.C + V * ts[0];
         if(P.y<LMIN || P.y>LMAX || P.z<LMIN || P.z>LMAX)
             ts[0] = NAN;
     }
 
     if(ts[1] != INFINITY) {
-        P = REAL4_extrapolate(cam.C, V, ts[1]);
+        P = cam.C + V * ts[1];
         if(P.y<LMIN || P.y>LMAX || P.z<LMIN || P.z>LMAX)
             ts[1] = NAN;
     }
 
     if(ts[2] != INFINITY) {
-        P = REAL4_extrapolate(cam.C, V, ts[2]);
+        P = cam.C + V * ts[2];
         if(P.x<LMIN || P.x>LMAX || P.z<LMIN || P.z>LMAX)
             ts[2] = NAN;
     }
 
     if(ts[3] != INFINITY) {
-        P = REAL4_extrapolate(cam.C, V, ts[3]);
+        P = cam.C + V * ts[3];
         if(P.x<LMIN || P.x>LMAX || P.z<LMIN || P.z>LMAX)
             ts[3] = NAN;
     }
 
     if(ts[4] != INFINITY) {
-        P = REAL4_extrapolate(cam.C, V, ts[4]);
+        P = cam.C + V * ts[4];
         if(P.x<LMIN || P.x>LMAX || P.y<LMIN || P.y>LMAX)
             ts[4] = NAN;
     }
 
     if(ts[5] != INFINITY) {
-        P = REAL4_extrapolate(cam.C, V, ts[5]);
+        P = cam.C + V * ts[5];
         if(P.x<LMIN || P.x>LMAX || P.y<LMIN || P.y>LMAX)
             ts[5] = NAN;
     }
@@ -373,7 +377,7 @@ __device__ static INT raycast(REAL4 *PP,
     t = t0;
 
     // Find P:  P = C + t.V
-    P = REAL4_extrapolate(cam.C, V, t);
+    P = cam.C + V * t;
 
     // Set the alpha accumulators to zero
     a = 0;
@@ -383,7 +387,7 @@ __device__ static INT raycast(REAL4 *PP,
     // ray progression.  We calculate Fdt for the normal value,
     // and Ndt for the finer value used when close to the threshold
     // (ie. under nearThreshold)
-    REAL dt, Ndt, Fdt;
+    Real dt, Ndt, Fdt;
 
     // There are different methods of progressing along the ray.
 
@@ -398,7 +402,7 @@ __device__ static INT raycast(REAL4 *PP,
     default:
         // Method 2 (default) divides the distance from the camera to the
         // virtual screen equally.
-        Fdt = REAL4_mag(V) / prm.depth;
+        Fdt = V.mag() / prm.depth;
     }
 
     dt = Fdt;
@@ -426,7 +430,7 @@ __device__ static INT raycast(REAL4 *PP,
             // We use the fractional part of the last Lyapunov exponent
             // as a pseudo-random number. This is then added to 'dt', scaled
             // by the amount of jitter requested.
-            REAL jit = l-trunc(l);
+            Real jit = l-trunc(l);
             if(jit<0)
                 jit = 1.0 - jit*prm.jitter;
             else
@@ -434,21 +438,21 @@ __device__ static INT raycast(REAL4 *PP,
 
             if(isfinite(jit)) {
                 t += dt*jit;
-                P = REAL4_extrapolate(P, V, dt*jit);
+                P += V * (dt*jit);
             }
             else {
                 t += dt;
-                P = REAL4_extrapolate(P, V, dt);
+                P += V * dt;
             }
         }
         else {
             // No jitter, so just add 'dt'.
             t += dt;
-            P = REAL4_extrapolate(P, V, dt);
+            P += V * dt;
         }
 
         // If the ray has exited Lyapunov space, then bugger it.
-        if(t>t1 || !in_lyap_space(P, LMIN, LMAX)) {
+        if (t>t1 || !P.in_lyap_space()) {
             return 1;
         }
 
@@ -457,14 +461,14 @@ __device__ static INT raycast(REAL4 *PP,
 
         // If the ray is still in transparent space, then we may still
         // want to accumulate alpha for clouding.
-        if(l > prm.chaosThreshold)
+        if (l > prm.chaosThreshold)
             c += l;
 
-        if(l <= prm.nearThreshold && !near) {
+        if (l <= prm.nearThreshold && !near) {
             near = true;
             dt = Ndt;
         }
-        else if(l > prm.nearThreshold && near) {
+        else if (l > prm.nearThreshold && near) {
             near = false;
             dt = Fdt;
         }
@@ -475,7 +479,7 @@ __device__ static INT raycast(REAL4 *PP,
 
     // If the ray has exited space, then this point is no longer
     // relevant.
-    if(t>t1 || !in_lyap_space(P, LMIN, LMAX)) {
+    if (t>t1 || !P.in_lyap_space()) {
         return 1;
     }
 
@@ -484,21 +488,21 @@ __device__ static INT raycast(REAL4 *PP,
 
     // If we've gone through then sign is 0. 'sign' is
     // the direction of the progression.
-    BOOL sign = 0;
-    BOOL osign = sign;
+    bool sign = 0;
+    bool osign = sign;
 
     // Half speed
-    REAL Qdt = dt * -0.5f;
-    REAL4 QdV = REAL4_scale(V, Qdt);
+    Real Qdt = dt * -0.5f;
+    Vec QdV = V * Qdt;
 
     // Set the range of the honing to <t-dt, t>.
-    REAL Qt1 = t;
-    REAL Qt0 = t-dt;
+    Real Qt1 = t;
+    Real Qt0 = t-dt;
 
     // Honing continues reversing back and forth, halving speed
     // each time. Once dt is less than or equal to dt/refine,
     // we stop: it's close enough.
-    REAL min_Qdt = dt/prm.refine;
+    Real min_Qdt = dt/prm.refine;
 
     // While 't' is still in the range <t-dt, t> AND dt is still
     // of significant size...
@@ -506,7 +510,7 @@ __device__ static INT raycast(REAL4 *PP,
 
         // Progress along the ray
         t += Qdt;
-        P = REAL4_add(P, QdV);
+        P += QdV;
 
         // Calculate the exponent
         l = lyap4d(P, prm.d, prm.settle, prm.accum, seq);
@@ -521,7 +525,7 @@ __device__ static INT raycast(REAL4 *PP,
         // If we've reversed, then halve the speed
         if(sign != osign) {
             Qdt *= -0.5f;
-            QdV = REAL4_scale(QdV, -0.5f);
+            QdV *= -0.5f;
         }
     }
 
@@ -542,8 +546,8 @@ __device__ static INT raycast(REAL4 *PP,
     // as a vector, please do so: it'd be nice to avoid this approximation!
     // (Hang on... that's not possible, is it?)
 
-    REAL mag = dt * prm.gradient;
-    REAL4 Ps[6] = {P,P,P,P,P,P};
+    Real mag = dt * prm.gradient;
+    Vec Ps[6] = {P,P,P,P,P,P};
     Ps[0].x -= mag;
     Ps[1].x += mag;
     Ps[2].y -= mag;
@@ -551,7 +555,7 @@ __device__ static INT raycast(REAL4 *PP,
     Ps[4].z -= mag;
     Ps[5].z += mag;
 
-    REAL ls[6];
+    Real ls[6];
     for(i=0; i<6; i++) {
         ls[i] = lyap4d(Ps[i], prm.d, prm.settle, prm.accum, seq);
     }
@@ -559,18 +563,17 @@ __device__ static INT raycast(REAL4 *PP,
     N.x = ls[1]-ls[0];
     N.y = ls[3]-ls[2];
     N.z = ls[5]-ls[4];
-    N.w = 0;
 
-    N = REAL4_normalize(N);
+    N.normalize();
 
     // Okay, we've done it. Output the hit point, the normal, the exact
-    // exponent at P (not REALly needed, but it does signal a hit failure
+    // exponent at P (not Really needed, but it does signal a hit failure
     // by l == NAN), and the accumulated alpha.
 
-    *PP = P;
-    *NP = N;
-    *aP = a;
-    *cP = c;
+    point->P = P;
+    point->N = N;
+    point->a = a;
+    point->c = c;
 
     return 0;
 }
@@ -579,59 +582,57 @@ __global__ void kernel_calc_render(RGBA *rgba,
                                    LyapPoint *points,
                                    LyapCam cam,
                                    LyapParams prm,
-                                   INT *seq,
+                                   Int *seq,
                                    LyapLight *lights,
-                                   UINT num_lights)
+                                   Uint num_lights)
 {
-    REAL4 P, N;
-    REAL a, c;
+    const int x = blockDim.x * blockIdx.x + threadIdx.x;
+    const int y = blockDim.y * blockIdx.y + threadIdx.y;
+    //const int x = blockIdx.x;
+    //const int y = blockIdx.y;
+    const int ind = x + y * gridDim.x;
 
-    int x = blockIdx.x;
-    int y = blockIdx.y;
-    int ind = x + y * gridDim.x;
+    if (0) printf("x: %d, %d, %d, %d\ty: %d, %d, %d, %d\t\t%d - %d\t%d - %d\t%d - %d\n",
+                  blockDim.x, blockIdx.x, threadIdx.x, gridDim.x,
+                  blockDim.y, blockIdx.y, threadIdx.y, gridDim.y,
+                  x, blockIdx.x,
+                  y, blockIdx.y,
+                  ind, blockIdx.x + blockIdx.y * gridDim.x);
 
-    //uint sx = __umul24(blockIdx.x, blockDim.x) + threadIdx.x;
-    //uint sy = __umul24(blockIdx.y, blockDim.y) + threadIdx.y;
-    //float su = sx / (float) cam.renderWidth;
-    //float sv = sy / (float) cam.renderHeight;
-    //uint i = __umul24(sy, cam.textureWidth) + sx;
-
-    INT ret = raycast(&P,
-                      &N,
-                      &a,
-                      &c,
+    Int ret = raycast(&(points[ind]),
                       x, y,
                       cam,
                       prm,
                       seq);
 
-    points[ind].x = P.x;
-    points[ind].y = P.y;
-    points[ind].z = P.z;
-    points[ind].nx = N.x;
-    points[ind].ny = N.y;
-    points[ind].nz = N.z;
-    points[ind].a = ret ? NAN : a;
-    points[ind].c = c;
+    Color color = shade(points[ind], cam, lights, num_lights);
 
-    REAL4 color = shade(points[ind], cam, lights, num_lights);
+    color.to_rgba((unsigned char *)&rgba[ind]);
+}
 
-    rgba[ind].r = (int)(255.0 * color.x) & 0xff;
-    rgba[ind].g = (int)(255.0 * color.y) & 0xff;
-    rgba[ind].b = (int)(255.0 * color.z) & 0xff;
-    rgba[ind].a = (int)(255.0 * color.w) & 0xff;
+
+void quit()
+{
+#if defined(__APPLE__) || defined(MACOSX)
+    glutDestroyWindow(glutGetWindow());
+    exit(EXIT_SUCCESS);
+    return;
+#else
+    glutDestroyWindow(glutGetWindow());
+    return;
+#endif
 }
 
 /**
  * Parse and load the sequence string into device memory
  */
-void cuda_load_sequence(INT **ret, unsigned char *seqStr)
+void cuda_load_sequence(Int **ret, unsigned char *seqStr)
 {
-    INT *seq;
+    Int *seq;
     size_t actual_length = 0;
     size_t estimated_length = 10 * strlen((const char *)seqStr) + 1;
 
-    seq = (INT *)malloc(estimated_length * sizeof(INT));
+    seq = (Int *)malloc(estimated_length * sizeof(Int));
 
     int last = 1;
     unsigned char *seqLetter = seqStr;
@@ -661,53 +662,59 @@ void cuda_load_sequence(INT **ret, unsigned char *seqStr)
     while (*(++seqLetter));
     *seqp = -1;
 
-    actual_length = (INT) (seqp - seq);
+    actual_length = (Int) (seqp - seq);
 
-    checkCudaErrors(cudaMalloc(ret, actual_length * sizeof(INT)));
-    checkCudaErrors(cudaMemcpy(*ret, seq, actual_length * sizeof(INT), cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMalloc(ret, actual_length * sizeof(Int)));
+    checkCudaErrors(cudaMemcpy(*ret, seq, actual_length * sizeof(Int), cudaMemcpyHostToDevice));
 
     free(seq);
 }
 
-void camCalculate (LyapCam *camP, UINT tw, UINT th, UINT td)
+void camCalculate (LyapCam *camP, Uint tw, Uint th, Uint td)
 {
-  if(camP->M<QUAT_EPSILON)
-    camP->M = QUAT_EPSILON;
+    if (camP->M < 1e-6)
+        camP->M = 1e-6;
 
-  camP->Q = QUAT_normalize(camP->Q);
+    camP->Q.normalize();
 
-  if(td>0)
-    camP->renderDenominator = td;
+    if (td>0)
+        camP->renderDenominator = td;
 
-  if(tw>0) {
-    camP->textureWidth = tw;
-    camP->renderWidth = camP->textureWidth/camP->renderDenominator;
-  }
+    if (tw>0) {
+        camP->textureWidth = tw;
+        camP->renderWidth = camP->textureWidth/camP->renderDenominator;
+    }
 
-  if(th>0) {
-    camP->textureHeight = th;
-    camP->renderHeight = camP->textureHeight/camP->renderDenominator;
-  }
+    if (th>0) {
+        camP->textureHeight = th;
+        camP->renderHeight = camP->textureHeight/camP->renderDenominator;
+    }
 
-  camP->V = REAL4_normalize(QUAT_transformREAL4(REAL4_init(0,0,1), camP->Q));
+    camP->V = camP->Q.transform(Vec(0,0,1)).normalized();
 
-  camP->S0 = QUAT_transformREAL4(REAL4_init(-camP->M, -camP->M, 1), camP->Q);
+    camP->S0 = camP->Q.transform(Vec(-camP->M, -camP->M, 1));
 
-  camP->lightInnerCone = REAL4_dot(camP->V, REAL4_normalize(QUAT_transformREAL4(REAL4_init(-camP->M, -camP->M, 1.5), camP->Q)));
-  camP->lightOuterCone = REAL4_dot(camP->V, REAL4_normalize(QUAT_transformREAL4(REAL4_init(-camP->M, -camP->M, 1), camP->Q)));
+    camP->lightInnerCone = camP->V % (camP->Q.transform(Vec(-camP->M, -camP->M, 1.5)).normalized());
+    camP->lightOuterCone = camP->V % (camP->Q.transform(Vec(-camP->M, -camP->M, 1)).normalized());
 
-  camP->SDX = QUAT_transformREAL4(REAL4_init(2*camP->M/(REAL)camP->renderWidth, 0, 0), camP->Q);
-  camP->SDY = QUAT_transformREAL4(REAL4_init(0, 2*camP->M/(REAL)camP->renderHeight, 0), camP->Q);
+    Vec SX = Vec(2*camP->M / (Real)camP->renderWidth, 0, 0);
+    camP->SDX = camP->Q.transform(SX);
+
+    Vec SY = Vec(0, 2*camP->M / (Real)camP->renderHeight, 0);
+    camP->SDY = camP->Q.transform(SY);
 }
 
 
 void init_scene()
 {
+    init_params();
+
     LyapLight *L = lights;
+
     for (int l=0; l<num_lights; l++, L++) {
-        L->V = REAL4_normalize(QUAT_transformREAL4(REAL4_init(0,0,1), L->Q));
-        L->lightInnerCone = REAL4_dot(L->V, REAL4_normalize(QUAT_transformREAL4(REAL4_init(-L->M, -L->M, 1.5), L->Q)));
-        L->lightOuterCone = REAL4_dot(L->V, REAL4_normalize(QUAT_transformREAL4(REAL4_init(-L->M, -L->M, 1), L->Q)));
+        L->V = L->Q.transform(Vec(0,0,1)).normalized();
+        L->lightInnerCone = L->V % (L->Q.transform(Vec(-L->M, -L->M, 1.5))).normalized();
+        L->lightOuterCone = L->V % (L->Q.transform(Vec(-L->M, -L->M, 1))).normalized();
     }
 
     checkCudaErrors(cudaMalloc(&cudaLights, sizeof(LyapLight) * MAX_LIGHTS));
@@ -737,29 +744,33 @@ void render()
     checkCudaErrors(cudaGraphicsMapResources(1, &cuda_pbo_resource, 0));
     checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void **)&cudaRGBA, &num_bytes, cuda_pbo_resource));
 
+
     // call CUDA kernel, writing results to PBO
-    kernel_calc_render<<<gridSize, 1>>>(cudaRGBA, cudaPoints, cam, prm, cudaSeq, cudaLights, num_lights);
+    //    for(int i = 0; i < passes; ++i) {
+    //        void *dummy;
+    kernel_calc_render<<<blocks, 1>>>(cudaRGBA, cudaPoints, cam, prm, cudaSeq, cudaLights, num_lights);
+    //cudaMemcpyAsync(dummy, dummy, 1, cudaMemcpyDeviceToDevice);
 
-    /*
-    int points_size = sizeof(LyapPoint) * imageWidth * imageHeight;
-    printf("Points size = %d\n", points_size);
 
-    LyapPoint *myPoints = (LyapPoint *)malloc(points_size);
-    printf("malloc'ed %p.\n", myPoints);
+    if (false) {
+      int points_size = sizeof(LyapPoint) * imageWidth * imageHeight;
+      printf("Points size = %d\n", points_size);
 
-    checkCudaErrors(cudaMemcpy( myPoints, cudaPoints, points_size, cudaMemcpyDeviceToHost ));
+      LyapPoint *myPoints = (LyapPoint *)malloc(points_size);
+      printf("malloc'ed %p.\n", myPoints);
 
-    LyapPoint *ptr = myPoints;
-    for (int y=0; y<2; y++)
-        for (int x=0; x<2; x++) {
-            printf("%d:\t%f,%f,%f\t%f,%f,%f\n",
-               points_size,
-               ptr->x, ptr->y, ptr->z,
-               ptr->nx, ptr->ny, ptr->nz);
-        }
+      checkCudaErrors(cudaMemcpy( myPoints, cudaPoints, points_size, cudaMemcpyDeviceToHost ));
 
-    free(myPoints);
-    */
+      LyapPoint *ptr = myPoints;
+      for (int i=0; i<imageWidth * imageHeight; i++, ptr++)
+          printf("%d:\t%f,%f,%f\t%f,%f,%f\n",
+                 points_size,
+                 ptr->P.x, ptr->P.y, ptr->P.z,
+                 ptr->N.x, ptr->N.y, ptr->N.z);
+
+      free(myPoints);
+      quit();
+    }
 
     // Handle error
     getLastCudaError("render_kernel failed");

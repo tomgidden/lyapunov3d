@@ -10,8 +10,10 @@
 #LDFLAGS+=-lpng
 
 
-NVCCFLAGS 	:= --use_fast_math -I/Developer/NVIDIA/CUDA-9.1/samples/common/inc/
-LIBS		:= -Xlinker -framework,GLUT -Xlinker -framework,OpenGL
+CUDA		?= /usr/local/cuda
+NVCC		= $(CUDA)/bin/nvcc
+NVCCFLAGS 	= --use_fast_math -I$(CUDA)/samples/common/inc/
+LIBS		= -Xlinker -framework,GLUT -Xlinker -framework,OpenGL
 SRCS 		= $(wildcard *.cu)
 BINS 		= $(patsubst %.cu,%,$(SRCS))
 
@@ -19,7 +21,7 @@ all: lyap_interactive
 #all: $(BINS)
 
 %: %.cu real4.h
-	nvcc $(NVCCFLAGS) $(LIBS) $< -o $@
+	$(NVCC) $(NVCCFLAGS) $(LIBS) $< -o $@
 
 clean:
 	rm -rf $(BINS) *.dSYM
