@@ -1,32 +1,25 @@
-CFLAGS+=-Wall -W -std=gnu99 -g
-CFLAGS+=-Wno-deprecated-declarations
+#CFLAGS+=-Wall -W -std=gnu99 -g
+#CFLAGS+=-Wno-deprecated-declarations
 
 #CFLAGS+=-I/System/Library/Frameworks/OpenCL.framework/Versions/A/Headers/ -I/System/Library/Frameworks/OpenGL.framework/Versions/A/Headers/
-LDFLAGS+=-framework OpenCL -framework GLUT -framework OpenGL
+#LDFLAGS+=-framework OpenCL -framework GLUT -framework OpenGL
 
+#CFLAGS+=-I/Developer/NVIDIA/CUDA-9.1/samples/common/inc/
 #CFLAGS+=-I/usr/X11/include/libpng15
 #LDFLAGS+=-L/usr/X11/lib -lpng
-LDFLAGS+=-lpng
+#LDFLAGS+=-lpng
 
-all: interactive offline
 
-offline: calculator renderer dumpheader
+NVCCFLAGS 	:= --use_fast_math -I/Developer/NVIDIA/CUDA-9.1/samples/common/inc/
+LIBS		:= -Xlinker -framework,GLUT -Xlinker -framework,OpenGL
+SRCS 		= $(wildcard *.cu)
+BINS 		= $(patsubst %.cu,%,$(SRCS))
 
-dumpheader.o: cglutils.h real4.h common.h params.h dumpheader.c
+all: lyap_interactive
+#all: $(BINS)
 
-dumpheader: dumpheader.o cglutils.o lyaputils.o
-
-calculator.o: cglutils.h real4.h common.h params.h
-
-calculator: calculator.o cglutils.o lyaputils.o
-
-renderer.o: cglutils.h real4.h common.h params.h
-
-renderer: renderer.o cglutils.o lyaputils.o
-
-interactive.o: cglutils.h real4.h common.h params.h lyaputils.h
-
-interactive: interactive.o cglutils.o lyaputils.o
+%: %.cu real4.h
+	nvcc $(NVCCFLAGS) $(LIBS) $< -o $@
 
 clean:
-	rm -rf interactive calculator renderer dumpheader *.o *.dSYM
+	rm -rf $(BINS) *.dSYM

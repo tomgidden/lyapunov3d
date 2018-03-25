@@ -1,4 +1,4 @@
-LyapParams __P = {
+LyapParams prm = {
   .d = 2.10,
   .settle = 5,
   .accum = 10,
@@ -14,21 +14,16 @@ LyapParams __P = {
   .lMin = 0.000000,
   .lMax = 4.000000
 };
-prm = __P;
-
-windowWidth = 1024;
-windowHeight = 1024;
 
 sequence = "AAAAAABBBBBBCCCCCCDDDDDD";
 
-LyapCamLight __C = {
+LyapCam cam = {
   .C = {4.010000,4.000000,4.000000,0.000000},
   .Q = {0.820473,-0.339851,-0.175920,0.424708},
   .M = 0.500000
 };
-cam = __C;
 
-LyapCamLight __L0 = {
+Ls[0] = {
   .C = {5.000000,7.000000,3.000000,0.000000},
   .Q = {0.710595,0.282082,-0.512168,0.391368},
   .M = 0.500000,
@@ -43,9 +38,8 @@ LyapCamLight __L0 = {
   .specularHardness = 10.000000,
   .chaosColor = {0.000000,0.000000,0.000000,0.000000}
 };
-Ls[0] = __L0;
 
-LyapCamLight __L1 = {
+Ls[1] = {
   .C = {3.000000,7.000000,5.000000,0.000000},
   .Q = {0.039640,0.840027,-0.538582,-0.052093},
   .M = 1.677200,
@@ -60,7 +54,3 @@ LyapCamLight __L1 = {
   .specularHardness = 10.000000,
   .chaosColor = {0.000000,0.000000,0.000000,0.000000}
 };
-Ls[1] = __L1;
-
-numLights = 2;
-
