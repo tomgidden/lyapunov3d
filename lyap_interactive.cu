@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include <helper_gl.h>
 
 #if defined (__APPLE__) || defined(MACOSX)
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -19,10 +18,11 @@
 #include <cuda_runtime.h>
 #include <cuda_gl_interop.h>
 
-// CUDA utilities and system includes
+// CUDA utilities and system includes from the CUDA SDK samples
 #include <helper_cuda.h>
 #include <helper_cuda_gl.h>
 #include <helper_functions.h>
+#include <helper_gl.h>
 
 #include "vec3.hpp"
 #include "quat.hpp"
@@ -30,16 +30,15 @@
 #include "structs.hpp"
 
 // Image and grid parameters
-const uint imageWidth = 256, imageHeight = 256;
-const uint blockSize = 1;
+const unsigned int imageWidth = 512, imageHeight = 512;
+const unsigned int blockSize = 16;
 const dim3 blocks(imageWidth / blockSize, imageHeight / blockSize);
 const dim3 threads(blockSize, blockSize);
-
-const uint windowWidth = imageWidth, windowHeight = imageHeight;
-const uint renderDenominator = 1;
+const unsigned int windowWidth = imageWidth, windowHeight = imageHeight;
+const unsigned int renderDenominator = 1;
 
 // Scene parameters
-const uint MAX_LIGHTS = 16;
+const unsigned int MAX_LIGHTS = 16;
 
 
 LyapParams prm;
@@ -53,9 +52,9 @@ unsigned int num_lights;
 void init_params()
 {
     prm.d = 2.10;
-    prm.settle = 5;
-    prm.accum = 10;
-    prm.stepMethod = 3;
+    prm.settle = 10;
+    prm.accum = 20;
+    prm.stepMethod = 1;
     prm.nearThreshold = -1.0;
     prm.nearMultiplier = 2.0;
     prm.opaqueThreshold = -1.125;
@@ -69,9 +68,9 @@ void init_params()
 
     sequence = (unsigned char *)"BCABA";
 
-    cam.C = Vec(4.010000f, 4.0f, 4.0f);
+    cam.C = Vec(3.51f, 3.5f, 3.5f);
     cam.Q = Quat(0.820473f, -0.339851f, -0.175920f, 0.424708f);
-    cam.M = 0.500000;
+    cam.M = 1;//.500000;
 
     lights[0].C = Vec(5.0f, 7.0f, 3.0f);
     lights[0].Q = Quat(0.710595f, 0.282082f, -0.512168f, 0.391368f);
@@ -105,10 +104,10 @@ void init_params()
 };
 
 // Data transfer of Pixel Buffer Object between CUDA and GL
-GLuint pbo;
-struct cudaGraphicsResource *cuda_pbo_resource;
+GLuint glPBO;
+struct cudaGraphicsResource *cudaPBO;
 // A simple semaphore to indicate whether the PBO has been mapped or not
-volatile int pbo_map_flag = 0;
+volatile int cudaPBO_map_count = 0;
 
 #if USE_LMINMAX
 #define LMIN prm->lMin
@@ -119,16 +118,16 @@ volatile int pbo_map_flag = 0;
 #endif
 
 // Device array of LyapPoint points
-__device__ LyapPoint *cudaPoints = 0;
+LyapPoint *cudaPoints = 0;
 
 // Device array of lights
-__device__ LyapLight *cudaLights = 0;
+LyapLight *cudaLights = 0;
 
 // Device pixel buffer
-__device__ RGBA *cudaRGBA;
+RGBA *cudaRGBA;
 
 // Device sequence array
-__device__ Int *cudaSeq;
+Int *cudaSeq;
 
 /**
  * Convert the lyapunov point into a pixel for rendering
@@ -137,76 +136,79 @@ __device__ Color shade(LyapPoint point, LyapCam cam, LyapLight *lights, Uint num
 {
     Color color = Color();
 
-    if(!isnan(point.a)) {
-        Uint l;
+    if (isnan(point.a)) {
+        color.w = 1;
+        return color;
+    }
 
-        // For each defined light
-        for(l=0; l<num_lights; ++l) {
-            Vec camV;
-            Vec lightV, halfV;
-            Color diffuse, specular, phong;
-            Real lightD2, i, j;
+    Uint l;
 
-            Vec P = point.P;
-            Vec N = point.N;
-            Real a = point.a;
-            Real c = point.c;
+    // For each defined light
+    for(l=0; l<num_lights; ++l) {
+        Vec camV;
+        Vec lightV, halfV;
+        Color diffuse, specular, phong;
+        Real lightD2, i, j;
 
-            camV = cam.C - P;
+        Vec P = point.P;
+        Vec N = point.N;
+        Real a = point.a;
+        Real c = point.c;
 
-            // Light vector (from point on surface to light source)
-            lightV = lights[l].C - P;
+        camV = cam.C - P;
 
-            // Get the length^2 of lightV (for falloff)
-            lightD2 = lightV.mag2();
+        // Light vector (from point on surface to light source)
+        lightV = lights[l].C - P;
 
-            // but then normalize lightV.
-            lightV.normalize();
+        // Get the length^2 of lightV (for falloff)
+        lightD2 = lightV.mag2();
 
-            // i: light vector dot surface normal
-            i = lightV % N;
+        // but then normalize lightV.
+        lightV.normalize();
 
-            // j: light vector dot spotlight cone
-            j = lightV % lights[l].V;
-            j = -j;
+        // i: light vector dot surface normal
+        i = lightV % N;
 
-            if (j > lights[l].lightOuterCone) {
+        // j: light vector dot spotlight cone
+        j = lightV % lights[l].V;
+        j = -j;
 
-                // Diffuse component: k * (L.N) * colour
-                i = Vec::clamp(i);
-                diffuse = lights[l].diffuseColor * (i*lights[l].diffusePower);
+        if (j > lights[l].lightOuterCone) {
 
-                // Halfway direction between camera and light, from point on surface
-                halfV = camV + lightV;
-                halfV.normalize();
+            // Diffuse component: k * (L.N) * colour
+            i = Vec::clamp(i);
+            diffuse = lights[l].diffuseColor * (i*lights[l].diffusePower);
 
-                // Specular component: k * (R.N)^alpha * colour
-                // R is natural reflection, which is at 90 degrees to halfV (?)
-                // (or is it?  Hmmm.  https://en.wikipedia.org/wiki/Phong_reflection_model)
-                i = Vec::clamp(N % halfV);
-                i = powf(i, lights[l].specularHardness);
+            // Halfway direction between camera and light, from point on surface
+            halfV = camV + lightV;
+            halfV.normalize();
 
-                specular = lights[l].specularColor * (i*lights[l].specularPower);
+            // Specular component: k * (R.N)^alpha * colour
+            // R is natural reflection, which is at 90 degrees to halfV (?)
+            // (or is it?  Hmmm.  https://en.wikipedia.org/wiki/Phong_reflection_model)
+            i = Vec::clamp(N % halfV);
+            i = powf(i, lights[l].specularHardness);
 
-                phong = (specular + diffuse) * (lights[l].lightRange/lightD2);
+            specular = lights[l].specularColor * (i*lights[l].specularPower);
 
-                if ( j < lights[l].lightInnerCone) {
-                    phong *= ((j-lights[l].lightOuterCone)/(lights[l].lightInnerCone-lights[l].lightOuterCone));
-                }
-                phong += lights[l].ambient;
+            phong = (specular + diffuse) * (lights[l].lightRange/lightD2);
+
+            if ( j < lights[l].lightInnerCone) {
+                phong *= ((j-lights[l].lightOuterCone)/(lights[l].lightInnerCone-lights[l].lightOuterCone));
             }
-            else {
-                phong = lights[l].ambient;
-            }
-
-            if(c>0.0) {
-                Color chaos;
-                chaos = lights[l].chaosColor * (0.1125/Vec::logf(c));
-                phong += chaos;
-            }
-
-            color += phong;
+            phong += lights[l].ambient;
         }
+        else {
+            phong = lights[l].ambient;
+        }
+
+        if(c>0.0) {
+            Color chaos;
+            chaos = lights[l].chaosColor * (0.1125/Vec::logf(c));
+            phong += chaos;
+        }
+
+        color += phong;
     }
 
     return color;
@@ -271,11 +273,12 @@ __device__ static Int raycast(LyapPoint *point,
     V.normalize();
     V /= cam.M;
 
-    Vec P;
-    Vec N;
+    Vec P;  // Point under consideration: will become the final hit point.
+    Vec N;  // Surface normal at the hit point.
 
     Real a; // high-low alpha
     Real c; // chaos alpha
+
     Real l;
 
     bool near = false;
@@ -289,8 +292,9 @@ __device__ static Int raycast(LyapPoint *point,
     Real t0=MAXFLOAT, t1=0;
     // Find ray intersection through entire Lyapunov space cube
 
-    // First, find values for 't' for intersections with the six infinite
-    // planes x=0, x=4, y=0, y=4, z=0, and z=4.
+    // First, find values for 't' for intersections with the six bounding
+    // planes x=0, x=4, y=0, y=4, z=0, and z=4.  Any planes that are
+    // parallel to the ray will meet the ray at INFINITY.
     Real ts[6];
     ts[0] = (V.x!=0.0f) ? ((LMIN-cam.C.x) / V.x) : INFINITY;
     ts[1] = (V.x!=0.0f) ? ((LMAX-cam.C.x) / V.x) : INFINITY;
@@ -305,44 +309,55 @@ __device__ static Int raycast(LyapPoint *point,
     // only if the points are equal. So, zero, one or two _unique_
     // intersections will occur. This is because zero, one or two
     // points on a line intersect a cube.
-    Int i0=-1, i1=-1;
-
+    //
+    // So, for each one, eliminate it if the intersection point lies
+    // outside the bounds of the other two axes.
     if(ts[0] != INFINITY) {
         P = cam.C + V * ts[0];
+        // If the x-min axis intersection is outside 0<=y<=4, 0<=z<=4, eliminate it.
         if(P.y<LMIN || P.y>LMAX || P.z<LMIN || P.z>LMAX)
             ts[0] = NAN;
     }
 
     if(ts[1] != INFINITY) {
         P = cam.C + V * ts[1];
+        // If the x-max axis intersection is outside 0<=y<=4, 0<=z<=4, eliminate it.
         if(P.y<LMIN || P.y>LMAX || P.z<LMIN || P.z>LMAX)
             ts[1] = NAN;
     }
 
     if(ts[2] != INFINITY) {
         P = cam.C + V * ts[2];
+        // If the y-min axis intersection is outside 0<=x<=4, 0<=z<=4, eliminate it.
         if(P.x<LMIN || P.x>LMAX || P.z<LMIN || P.z>LMAX)
             ts[2] = NAN;
     }
 
     if(ts[3] != INFINITY) {
         P = cam.C + V * ts[3];
+        // If the y-max axis intersection is outside 0<=x<=4, 0<=z<=4, eliminate it.
         if(P.x<LMIN || P.x>LMAX || P.z<LMIN || P.z>LMAX)
             ts[3] = NAN;
     }
 
     if(ts[4] != INFINITY) {
         P = cam.C + V * ts[4];
+        // If the z-min axis intersection is outside 0<=x<=4, 0<=y<=4, eliminate it.
         if(P.x<LMIN || P.x>LMAX || P.y<LMIN || P.y>LMAX)
             ts[4] = NAN;
     }
 
     if(ts[5] != INFINITY) {
         P = cam.C + V * ts[5];
+        // If the z-max axis intersection is outside 0<=x<=4, 0<=y<=4, eliminate it.
         if(P.x<LMIN || P.x>LMAX || P.y<LMIN || P.y>LMAX)
             ts[5] = NAN;
     }
 
+    // Find the smallest and largest finite 't' values for all the
+    // intersections.  This identifies which of the bounding planes the
+    // ray hits first and last.  The others can be ignored.
+    Int i0=-1, i1=-1;
     for(i=0; i<6; i++) {
         if(isfinite(ts[i])) {
             if(i0==-1 || ts[i] < t0)
@@ -358,6 +373,7 @@ __device__ static Int raycast(LyapPoint *point,
     if(i0==-1 && i1==-1) {
         return 1;
     }
+
     // If only one point matched, then the ray must(?) start in
     // Lyapunov space and exit it, so we can start at zero instead.
     else if(i1==-1 || i0==i1) {
@@ -588,25 +604,18 @@ __global__ void kernel_calc_render(RGBA *rgba,
 {
     const int x = blockDim.x * blockIdx.x + threadIdx.x;
     const int y = blockDim.y * blockIdx.y + threadIdx.y;
-    //const int x = blockIdx.x;
-    //const int y = blockIdx.y;
-    const int ind = x + y * gridDim.x;
+    const int ind = x + y * gridDim.x*blockDim.x;
 
-    if (0) printf("x: %d, %d, %d, %d\ty: %d, %d, %d, %d\t\t%d - %d\t%d - %d\t%d - %d\n",
-                  blockDim.x, blockIdx.x, threadIdx.x, gridDim.x,
-                  blockDim.y, blockIdx.y, threadIdx.y, gridDim.y,
-                  x, blockIdx.x,
-                  y, blockIdx.y,
-                  ind, blockIdx.x + blockIdx.y * gridDim.x);
+    // Perform ray-casting (ie. non-bouncing ray-tracing; it's hard enough
+    // as it is) to find the hit point for this pixel, accumulating data
+    // into the point structure.
+    Int ret = raycast(&(points[ind]), x, y, cam, prm, seq);
 
-    Int ret = raycast(&(points[ind]),
-                      x, y,
-                      cam,
-                      prm,
-                      seq);
-
+    // Convert the abstract point structure -- position, surface normal,
+    // chaos, etc. -- into a colour, using the lights provided.
     Color color = shade(points[ind], cam, lights, num_lights);
 
+    // Convert the floating-point colour into a 32-bit RGBA pixel
     color.to_rgba((unsigned char *)&rgba[ind]);
 }
 
@@ -626,7 +635,7 @@ void quit()
 /**
  * Parse and load the sequence string into device memory
  */
-void cuda_load_sequence(Int **ret, unsigned char *seqStr)
+void cuda_load_sequence(unsigned char *seqStr)
 {
     Int *seq;
     size_t actual_length = 0;
@@ -662,10 +671,10 @@ void cuda_load_sequence(Int **ret, unsigned char *seqStr)
     while (*(++seqLetter));
     *seqp = -1;
 
-    actual_length = (Int) (seqp - seq);
+    actual_length = (Int) (seqp - seq) + 1;
 
-    checkCudaErrors(cudaMalloc(ret, actual_length * sizeof(Int)));
-    checkCudaErrors(cudaMemcpy(*ret, seq, actual_length * sizeof(Int), cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMalloc(&cudaSeq, actual_length * sizeof(Int)));
+    checkCudaErrors(cudaMemcpy(cudaSeq, seq, actual_length * sizeof(Int), cudaMemcpyHostToDevice));
 
     free(seq);
 }
@@ -721,7 +730,7 @@ void init_scene()
 
     checkCudaErrors(cudaMalloc(&cudaPoints, sizeof(LyapPoint) * imageWidth * imageHeight));
 
-    cuda_load_sequence(&cudaSeq, sequence);
+    cuda_load_sequence(sequence);
 
     camCalculate(&cam, windowWidth, windowHeight, renderDenominator);
 }
@@ -737,20 +746,17 @@ void render()
     // Load lights into device memory
     checkCudaErrors(cudaMemcpy(cudaLights, lights, sizeof(LyapLight) * num_lights, cudaMemcpyHostToDevice));
 
-    // Increment the map flag: like a semaphore
-    pbo_map_flag++;
-
     // Map PBO to get CUDA device pointer
-    checkCudaErrors(cudaGraphicsMapResources(1, &cuda_pbo_resource, 0));
-    checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void **)&cudaRGBA, &num_bytes, cuda_pbo_resource));
-
+    cudaPBO_map_count++;
+    checkCudaErrors(cudaGraphicsMapResources(1, &cudaPBO, 0));
+    checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void **)&cudaRGBA, &num_bytes, cudaPBO));
 
     // call CUDA kernel, writing results to PBO
     //    for(int i = 0; i < passes; ++i) {
-    //        void *dummy;
-    kernel_calc_render<<<blocks, 1>>>(cudaRGBA, cudaPoints, cam, prm, cudaSeq, cudaLights, num_lights);
-    //cudaMemcpyAsync(dummy, dummy, 1, cudaMemcpyDeviceToDevice);
-
+    //    void *dummy;
+    kernel_calc_render<<<blocks, threads>>>(cudaRGBA, cudaPoints, cam, prm, cudaSeq, cudaLights, num_lights);
+    //    cudaMemcpyAsync(dummy, dummy, 1, cudaMemcpyDeviceToDevice);
+    //}
 
     if (false) {
       int points_size = sizeof(LyapPoint) * imageWidth * imageHeight;
@@ -773,12 +779,12 @@ void render()
     }
 
     // Handle error
-    getLastCudaError("render_kernel failed");
+    getLastCudaError("kernel render failed");
 
     // Unmap cleanly
-    if (pbo_map_flag) {
-        checkCudaErrors(cudaGraphicsUnmapResources(1, &cuda_pbo_resource, 0));
-        pbo_map_flag--;
+    if (cudaPBO_map_count) {
+        checkCudaErrors(cudaGraphicsUnmapResources(1, &cudaPBO, 0));
+        cudaPBO_map_count--;
     }
 }
 
@@ -796,12 +802,13 @@ void display()
     // draw image from PBO
     glDisable(GL_DEPTH_TEST);
     glRasterPos2i(0, 0);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, pbo);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, glPBO);
     glDrawPixels(imageWidth, imageHeight, GL_RGBA, GL_UNSIGNED_BYTE, 0);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
 
     // Output the image to the screen
     glutSwapBuffers();
+
     glutReportErrors();
 }
 
@@ -810,6 +817,7 @@ void display()
  */
 void idle()
 {
+    cam.C.x += 0.001;
     glutPostRedisplay();
 }
 
@@ -836,35 +844,27 @@ void cleanup()
     checkCudaErrors(cudaFree(cudaSeq));
 
     // Unmap the PBO if it has been mapped
-    if (pbo_map_flag) {
-        checkCudaErrors(cudaGraphicsUnmapResources(1, &cuda_pbo_resource, 0));
-        pbo_map_flag--;
+    if (cudaPBO_map_count) {
+        checkCudaErrors(cudaGraphicsUnmapResources(1, &cudaPBO, 0));
+        cudaPBO_map_count--;
     }
 
     // Unregister this buffer object from CUDA and from GL
-    checkCudaErrors(cudaGraphicsUnregisterResource(cuda_pbo_resource));
-    glDeleteBuffers(1, &pbo);
+    checkCudaErrors(cudaGraphicsUnregisterResource(cudaPBO));
+    glDeleteBuffers(1, &glPBO);
 }
 
-void initGLBuffers()
-{
-    // Create pixel buffer object
-    glGenBuffers(1, &pbo);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, pbo);
-    glBufferData(GL_PIXEL_UNPACK_BUFFER_ARB, imageWidth*imageHeight*sizeof(RGBA), 0, GL_STREAM_DRAW_ARB);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
-
-    // Register this buffer object with CUDA
-    checkCudaErrors(cudaGraphicsGLRegisterBuffer(&cuda_pbo_resource, pbo, cudaGraphicsMapFlagsWriteDiscard));
-}
-
-void initGL(int *argc, char **argv)
+void init_gl(int *argc, char **argv)
 {
     // initialize GLUT callback functions
     glutInit(argc, argv);
+
     glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);
+
     glutInitWindowSize(windowWidth, windowHeight);
-    glutCreateWindow("Lyapunov2018");
+
+    glutCreateWindow(argv[0]);
+
     glutDisplayFunc(display);
     //glutKeyboardFunc(keyboard);
     glutReshapeFunc(reshape);
@@ -876,10 +876,27 @@ void initGL(int *argc, char **argv)
     }
 }
 
+void init_gl_buffer(unsigned int _imageWidth, unsigned int _imageHeight)
+{
+    if (glPBO) {
+        cudaGraphicsUnregisterResource(cudaPBO);
+        glDeleteBuffers(1, &glPBO);
+    };
+
+    // Create pixel buffer object
+    glGenBuffers(1, &glPBO);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, glPBO);
+    glBufferData(GL_PIXEL_UNPACK_BUFFER_ARB, _imageWidth * _imageHeight * sizeof(RGBA), 0, GL_STREAM_DRAW);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+
+    // Register this buffer object with CUDA.  We only need to do this once.
+    checkCudaErrors(cudaGraphicsGLRegisterBuffer(&cudaPBO, glPBO, cudaGraphicsMapFlagsWriteDiscard));
+}
+
 /**
  * Find CUDA device
  */
-int chooseCudaDevice(int argc, char **argv, bool use_gl)
+int choose_cuda_device(int argc, char **argv, bool use_gl)
 {
     int result = 0;
 
@@ -899,17 +916,17 @@ int main(int argc, char **argv)
     setenv ("DISPLAY", ":0", 0);
 #endif
 
+    // Use command-line specified CUDA device, otherwise use device with
+    // highest Gflops/s
+    choose_cuda_device(argc, argv, true);
+
     // First initialize OpenGL context, so we can properly set the GL for
     // CUDA.  This is necessary in order to achieve optimal performance
     // with OpenGL/CUDA interop.
-    initGL(&argc, argv);
+    init_gl(&argc, argv);
 
-    // Use command-line specified CUDA device, otherwise use device with
-    // highest Gflops/s
-    chooseCudaDevice(argc, argv, true);
-
-    // OpenGL buffers
-    initGLBuffers();
+    // Create GL/CUDA interop buffer
+    init_gl_buffer(imageWidth, imageHeight);
 
     // Initialise scene
     init_scene();

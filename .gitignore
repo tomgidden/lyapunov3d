@@ -1,3 +1,7 @@
+._*
+.\#*
+lyap_interactive
+
 # Object files
 *.o
 *.ko
@@ -31,3 +35,4 @@
 # Debug files
 *.dSYM/
 *.su
+
