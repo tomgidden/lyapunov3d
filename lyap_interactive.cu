@@ -30,20 +30,47 @@
 #include "structs.hpp"
 
 // Image and grid parameters
-const unsigned int imageWidth = 512, imageHeight = 512;
+unsigned int imageWidth = 1024, imageHeight = 512;
 const unsigned int blockSize = 16;
 const dim3 blocks(imageWidth / blockSize, imageHeight / blockSize);
 const dim3 threads(blockSize, blockSize);
-const unsigned int windowWidth = imageWidth, windowHeight = imageHeight;
-const unsigned int renderDenominator = 1;
+unsigned int windowWidth = imageWidth, windowHeight = imageHeight;
+unsigned int renderDenominator = 1;
 
 // Scene parameters
 const unsigned int MAX_LIGHTS = 16;
 
+// Control
+static bool dominant = false;
+
+static enum {
+  MODE_LOCK,
+  MODE_ROTPAN,
+  MODE_MAG,
+  MODE_NTHRESH,
+  MODE_OTHRESH,
+  MODE_CTHRESH,
+  MODE_D,
+  MODE_JITTER,
+  MODE_L_PAN,
+  MODE_L_RANGE,
+  MODE_L_COLOR
+} controlMode = MODE_ROTPAN;
+
+static bool update_calc = true;
+static bool update_render = false;
+static bool update_lights = true;
+static bool update_cam = true;
 
 LyapParams prm;
 LyapCam cam;
+
+LyapParams *curP = &prm;
+LyapCam *curC = &cam;
+unsigned int curL = 0;
+
 LyapLight lights[MAX_LIGHTS];
+LyapLight L0;
 
 unsigned char *sequence;
 
@@ -51,15 +78,15 @@ unsigned int num_lights;
 
 void init_params()
 {
-    prm.d = 2.10;
-    prm.settle = 10;
-    prm.accum = 20;
-    prm.stepMethod = 1;
+    prm.d = 1.85;
+    prm.settle = 100;
+    prm.accum = 2000;
+    prm.stepMethod = 2;
     prm.nearThreshold = -1.0;
     prm.nearMultiplier = 2.0;
-    prm.opaqueThreshold = -1.125;
-    prm.chaosThreshold = 100000.0;
-    prm.depth = 16.0;
+    prm.opaqueThreshold = -1.0;
+    prm.chaosThreshold = 0;
+    prm.depth = 64.0;
     prm.jitter = 0.5;
     prm.refine = 32.0;
     prm.gradient = 0.01;
@@ -69,8 +96,8 @@ void init_params()
     sequence = (unsigned char *)"BCABA";
 
     cam.C = Vec(3.51f, 3.5f, 3.5f);
-    cam.Q = Quat(0.820473f, -0.339851f, -0.175920f, 0.424708f);
-    cam.M = 1;//.500000;
+    cam.Q = Quat(-0.039979,0.891346,-0.299458,-0.337976);
+    cam.M = 0.5;
 
     lights[0].C = Vec(5.0f, 7.0f, 3.0f);
     lights[0].Q = Quat(0.710595f, 0.282082f, -0.512168f, 0.391368f);
@@ -101,6 +128,8 @@ void init_params()
     lights[1].chaosColor = Color(0, 0, 1, 1);
 
     num_lights = 2;
+
+    L0 = lights[0];
 };
 
 // Data transfer of Pixel Buffer Object between CUDA and GL
@@ -244,16 +273,18 @@ __device__ static Real lyap4d(Vec P, Real d, Uint settle, Uint accum, const Int 
         v = r * v * (1.0 - v);
     }
 
-    if((v-0.5 <= -1e-4) || (v-0.5 >= 1e-4)) {
+    if((v-0.5 <= -1e-8) || (v-0.5 >= 1e-8)) {
         // Now calculate the value by running the iteration with accumulation
         for(n = 0; n < accum; n++) {
             r = abcd[seq[seqi++]];
             if(seq[seqi]==-1) seqi = 0;
             v = r * v * (1.0 - v);
             r = r - 2.0 * r * v;
-            r = fabs(r);
+            if (r < 0) r = -r;
             l += Vec::logf(r);
-            if(!isfinite(l)) { return NAN; }
+            if (!isfinite(l)) {
+                return NAN;
+            }
         }
     }
 
@@ -359,7 +390,7 @@ __device__ static Int raycast(LyapPoint *point,
     // ray hits first and last.  The others can be ignored.
     Int i0=-1, i1=-1;
     for(i=0; i<6; i++) {
-        if(isfinite(ts[i])) {
+        if (isfinite(ts[i])) {
             if(i0==-1 || ts[i] < t0)
                 t0 = ts[i0=i];
 
@@ -452,7 +483,7 @@ __device__ static Int raycast(LyapPoint *point,
             else
                 jit = 1.0 + jit*prm.jitter;
 
-            if(isfinite(jit)) {
+            if (isfinite(jit)) {
                 t += dt*jit;
                 P += V * (dt*jit);
             }
@@ -467,8 +498,9 @@ __device__ static Int raycast(LyapPoint *point,
             P += V * dt;
         }
 
-        // If the ray has exited Lyapunov space, then bugger it.
-        if (t>t1 || !P.in_lyap_space()) {
+        // If the ray has passed the first exit plane, then bugger it.
+        //if (t>t1 || !P.in_lyap_space()) { // Overkill: passing t1 should be the exit of L-space anyway
+        if (t>t1) {
             return 1;
         }
 
@@ -477,8 +509,12 @@ __device__ static Int raycast(LyapPoint *point,
 
         // If the ray is still in transparent space, then we may still
         // want to accumulate alpha for clouding.
-        if (l > prm.chaosThreshold)
+        if (l > prm.chaosThreshold) {
             c += l;
+        }
+        else if (l > prm.opaqueThreshold) {
+            a += l;
+        }
 
         if (l <= prm.nearThreshold && !near) {
             near = true;
@@ -495,7 +531,8 @@ __device__ static Int raycast(LyapPoint *point,
 
     // If the ray has exited space, then this point is no longer
     // relevant.
-    if (t>t1 || !P.in_lyap_space()) {
+    //if (t>t1 || !P.in_lyap_space()) { // Overkill: passing t1 should be the exit of L-space anyway
+    if (t>t1) {
         return 1;
     }
 
@@ -522,7 +559,7 @@ __device__ static Int raycast(LyapPoint *point,
 
     // While 't' is still in the range <t-dt, t> AND dt is still
     // of significant size...
-    while(t<=Qt1 && t>=Qt0 && (Qdt<=-min_Qdt || Qdt>=min_Qdt)) {
+    while (t<=Qt1 && t>=Qt0 && (Qdt<=-min_Qdt || Qdt>=min_Qdt)) {
 
         // Progress along the ray
         t += Qdt;
@@ -532,14 +569,14 @@ __device__ static Int raycast(LyapPoint *point,
         l = lyap4d(P, prm.d, prm.settle, prm.accum, seq);
 
         // If we've hit the threshold exactly, short-circuit.
-        if(l==prm.opaqueThreshold) break;
+        if (l==prm.opaqueThreshold) break;
 
         // Work out whether we reverse or not:
         osign = sign;
         sign = (l < prm.opaqueThreshold) ? 0 : 1;
 
         // If we've reversed, then halve the speed
-        if(sign != osign) {
+        if (sign != osign) {
             Qdt *= -0.5f;
             QdV *= -0.5f;
         }
@@ -679,7 +716,7 @@ void cuda_load_sequence(unsigned char *seqStr)
     free(seq);
 }
 
-void camCalculate (LyapCam *camP, Uint tw, Uint th, Uint td)
+void cam_calculate (LyapCam *camP, Uint tw, Uint th, Uint td)
 {
     if (camP->M < 1e-6)
         camP->M = 1e-6;
@@ -718,21 +755,34 @@ void init_scene()
 {
     init_params();
 
-    LyapLight *L = lights;
-
-    for (int l=0; l<num_lights; l++, L++) {
-        L->V = L->Q.transform(Vec(0,0,1)).normalized();
-        L->lightInnerCone = L->V % (L->Q.transform(Vec(-L->M, -L->M, 1.5))).normalized();
-        L->lightOuterCone = L->V % (L->Q.transform(Vec(-L->M, -L->M, 1))).normalized();
-    }
-
     checkCudaErrors(cudaMalloc(&cudaLights, sizeof(LyapLight) * MAX_LIGHTS));
-
     checkCudaErrors(cudaMalloc(&cudaPoints, sizeof(LyapPoint) * imageWidth * imageHeight));
 
     cuda_load_sequence(sequence);
 
-    camCalculate(&cam, windowWidth, windowHeight, renderDenominator);
+    update_lights = true;
+    update_cam = true;
+}
+
+void update_scene()
+{
+    if (update_lights) {
+        LyapLight *L = lights;
+
+        for (int l=0; l<num_lights; l++, L++) {
+            L->V = L->Q.transform(Vec(0,0,1)).normalized();
+            L->lightInnerCone = L->V % (L->Q.transform(Vec(-L->M, -L->M, 1.5))).normalized();
+            L->lightOuterCone = L->V % (L->Q.transform(Vec(-L->M, -L->M, 1))).normalized();
+        }
+
+        // Load lights into device memory
+        checkCudaErrors(cudaMemcpy(cudaLights, lights, sizeof(LyapLight) * num_lights, cudaMemcpyHostToDevice));
+    }
+
+
+    if (update_cam) {
+        cam_calculate(&cam, windowWidth, windowHeight, renderDenominator);
+    }
 }
 
 
@@ -743,9 +793,6 @@ void render()
 {
     size_t num_bytes;
 
-    // Load lights into device memory
-    checkCudaErrors(cudaMemcpy(cudaLights, lights, sizeof(LyapLight) * num_lights, cudaMemcpyHostToDevice));
-
     // Map PBO to get CUDA device pointer
     cudaPBO_map_count++;
     checkCudaErrors(cudaGraphicsMapResources(1, &cudaPBO, 0));
@@ -753,29 +800,29 @@ void render()
 
     // call CUDA kernel, writing results to PBO
     //    for(int i = 0; i < passes; ++i) {
-    //    void *dummy;
+    //        void *dummy;
     kernel_calc_render<<<blocks, threads>>>(cudaRGBA, cudaPoints, cam, prm, cudaSeq, cudaLights, num_lights);
-    //    cudaMemcpyAsync(dummy, dummy, 1, cudaMemcpyDeviceToDevice);
-    //}
+    //        cudaMemcpyAsync(dummy, dummy, 1, cudaMemcpyDeviceToDevice);
+    //    }
 
     if (false) {
-      int points_size = sizeof(LyapPoint) * imageWidth * imageHeight;
-      printf("Points size = %d\n", points_size);
+        int points_size = sizeof(LyapPoint) * imageWidth * imageHeight;
+        printf("Points size = %d\n", points_size);
 
-      LyapPoint *myPoints = (LyapPoint *)malloc(points_size);
-      printf("malloc'ed %p.\n", myPoints);
+        LyapPoint *myPoints = (LyapPoint *)malloc(points_size);
+        printf("malloc'ed %p.\n", myPoints);
 
-      checkCudaErrors(cudaMemcpy( myPoints, cudaPoints, points_size, cudaMemcpyDeviceToHost ));
+        checkCudaErrors(cudaMemcpy( myPoints, cudaPoints, points_size, cudaMemcpyDeviceToHost ));
 
-      LyapPoint *ptr = myPoints;
-      for (int i=0; i<imageWidth * imageHeight; i++, ptr++)
-          printf("%d:\t%f,%f,%f\t%f,%f,%f\n",
-                 points_size,
-                 ptr->P.x, ptr->P.y, ptr->P.z,
-                 ptr->N.x, ptr->N.y, ptr->N.z);
+        LyapPoint *ptr = myPoints;
+        for (int i=0; i<imageWidth * imageHeight; i++, ptr++)
+            printf("%d:\t%f,%f,%f\t%f,%f,%f\n",
+                   points_size,
+                   ptr->P.x, ptr->P.y, ptr->P.z,
+                   ptr->N.x, ptr->N.y, ptr->N.z);
 
-      free(myPoints);
-      quit();
+        free(myPoints);
+        quit();
     }
 
     // Handle error
@@ -793,6 +840,9 @@ void render()
  */
 void display()
 {
+    // Perform any necessary updates
+    update_scene();
+
     // Render the data
     render();
 
@@ -817,8 +867,330 @@ void display()
  */
 void idle()
 {
-    cam.C.x += 0.001;
-    glutPostRedisplay();
+    if(update_render || update_calc || update_lights || update_cam)
+        glutPostRedisplay();
+}
+
+static void glut_spaceball_but(int button, int state)
+{
+    if(state != GLUT_UP) return;
+
+    switch (button) {
+    case 1:
+        fprintf(stderr, "DOM%d\n", dominant = !dominant);
+        break;
+
+    default:
+        fprintf(stderr, "B%d\n", button);
+    }
+}
+
+static void glut_spaceball_rot(int x, int y, int z)
+{
+    if(controlMode==MODE_ROTPAN) {
+        Vec axis = Vec(x, -y, z);
+        axis.spaceball_soften(50, 500, 1);
+
+        Real len = axis.mag();
+
+        if (len < 1e-6) return;
+
+        axis /= len; // a.k.a Normalize
+
+        if(dominant) axis.dominantize();
+
+        Quat rQ = Quat(axis, len*0.05, false);
+
+        curC->Q = (curC->Q * rQ).normalized();
+
+        update_cam = true;
+        update_calc = true;
+    }
+    else if(controlMode==MODE_MAG) {
+        curC->M += (float)x/2500.0;
+        printf("M:%.4f\n",curC->M);
+
+        update_cam = true;
+        update_calc = true;
+    }
+    else if(controlMode==MODE_NTHRESH) {
+        curP->nearThreshold += (float)x/10000.0;
+        if(curP->opaqueThreshold > curP->nearThreshold)
+            curP->nearThreshold = curP->opaqueThreshold;
+        printf("Thresh:%.4f - %.4f\n",curP->nearThreshold, curP->opaqueThreshold);
+
+        update_calc = true;
+    }
+    else if(controlMode==MODE_OTHRESH) {
+        curP->opaqueThreshold += (float)x/10000.0;
+        if(curP->opaqueThreshold > curP->nearThreshold)
+            curP->opaqueThreshold = curP->nearThreshold;
+        printf("Thresh:%.4f - %.4f\n",curP->nearThreshold, curP->opaqueThreshold);
+
+        update_calc = true;
+    }
+    else if(controlMode==MODE_CTHRESH) {
+        curP->chaosThreshold += (float)x/10000.0;
+
+        update_calc = true;
+    }
+    else if(controlMode==MODE_D) {
+        curP->d += (float)x/10000.0;
+
+        if(curP->d<curP->lMin)
+            curP->d = curP->lMin;
+
+        else if(curP->d>curP->lMax)
+            curP->d = curP->lMax;
+
+        printf("d:%.2f\n", curP->d);
+
+        update_calc = true;
+    }
+    else if(controlMode==MODE_JITTER) {
+
+        curP->jitter += (float)x/10000.0;
+
+        if(curP->jitter<0)
+            curP->jitter=0;
+
+        else if(curP->jitter>1.0)
+            curP->jitter=1.0;
+
+        printf("j:%.2f\n", curP->jitter);
+
+        update_calc = true;
+    }
+    // else if(controlMode==MODE_L_RANGE) {
+    //     if(curL+1 > num_lights)
+    //         setupLight(curL);
+
+    //     lights[curL].lightRange += (float)x/2500.0;
+    //     if(lights[curL].lightRange<0)
+    //         lights[curL].lightRange=0;
+
+    //     cam_calculate(&lights[curL], windowWidth, windowHeight, renderDenominator);
+    //     update_lights = true;
+    //   update_render = true;
+    // }
+}
+
+static void glut_spaceball_pan(int x, int y, int z)
+{
+    if(controlMode==MODE_ROTPAN) {
+        Vec delta = Vec(x, -y, z);
+        delta.spaceball_soften(50, 500, 0.05);
+
+        if(dominant) delta.dominantize();
+
+        delta = curC->Q.transform(delta);
+
+        curC->C += delta;
+
+        printf("C:%.4f,%.4f,%.4f\tQ:%.4f,%.4f,%.4f,%.4f\n",
+               curC->C.x, curC->C.y, curC->C.z,
+               curC->Q.x, curC->Q.y, curC->Q.z, curC->Q.w);
+
+        update_cam = true;
+        update_lights = true;
+        update_calc = true;
+    }
+    else if(controlMode==MODE_L_PAN) {
+        if(curL+1 > num_lights) return;//setupLight(curL);
+
+        Vec delta = Vec(x, -y, z);
+        delta.spaceball_soften(50, 500, 0.25);
+
+        if(dominant) delta.dominantize();
+
+        delta = curC->Q.transform(delta);
+
+        lights[curL].C += delta;
+
+        printf("L%d:%.4f,%.4f,%.4f\n", curL,
+               lights[curL].C.x,
+               lights[curL].C.y,
+               lights[curL].C.z);
+
+        update_cam = true;
+        update_lights = true;
+        update_render = true;
+    }
+    else if(controlMode==MODE_L_COLOR) {
+        if(curL+1 > num_lights) return;//setupLight(curL);
+
+        Vec delta = Vec(x, -y, z);
+        delta.spaceball_soften(50, 500, 0.25);
+
+        if(dominant) delta.dominantize();
+
+        lights[curL].diffuseColor.x += delta.x;
+        lights[curL].diffuseColor.y += delta.y;
+        lights[curL].diffuseColor.z += delta.z;
+
+        lights[curL].diffuseColor.x = Vec::clamp(lights[curL].diffuseColor.x);
+        lights[curL].diffuseColor.y = Vec::clamp(lights[curL].diffuseColor.y);
+        lights[curL].diffuseColor.z = Vec::clamp(lights[curL].diffuseColor.z);
+
+        lights[curL].specularColor = lights[curL].diffuseColor;
+
+        update_lights = true;
+        update_render = true;
+    }
+}
+
+static void glut_keyboard(unsigned char k,
+                          int x __attribute__ ((unused)),
+                          int y __attribute__ ((unused)))
+{
+    switch (k) {
+    case '1':
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    case '6':
+    case '7':
+    case '8':
+    case '9':
+        curL = k-'1';
+        curC = &lights[curL];
+        controlMode = MODE_ROTPAN;
+        update_cam = true;
+        update_render = true;
+        update_lights = true;
+        break;
+
+    case '0':
+        curC = &cam;
+        controlMode = MODE_ROTPAN;
+        update_cam = true;
+        update_calc = true;
+        break;
+
+    case 'l':
+    case 'L':
+        controlMode = MODE_L_PAN;
+        update_lights = true;
+        break;
+
+    case 'r':
+    case 'R':
+        controlMode = MODE_L_RANGE;
+        update_lights = true;
+        break;
+
+    case 'o':
+    case 'O':
+        controlMode = MODE_L_COLOR;
+        update_lights = true;
+        break;
+
+        //case 'W': case 'w': save(); break;
+
+    case 'd': case 'D': controlMode = MODE_D; break;
+    case 'j': case 'J': controlMode = MODE_JITTER; break;
+    case 't': case 'T': controlMode = MODE_OTHRESH; break;
+    case 'y': case 'Y': controlMode = MODE_NTHRESH; break;
+    case 'c': case 'C': controlMode = MODE_CTHRESH; break;
+    case 'm': case 'M': controlMode = MODE_MAG; break;
+    case '[': case '{': curP->stepMethod = 1; update_calc = true; break;
+    case ']': case '}': curP->stepMethod = 2; update_calc = true; break;
+
+    case 'z':
+        curP->depth -= 1;
+        if(curP->depth<1.0)
+            curP->depth = 1.0;
+        printf("depth=%.0f\n",(float)(int)curP->depth);
+        update_calc = true;
+        break;
+
+    case 'Z':
+        curP->depth /= 2;
+        if(curP->depth<1.0)
+            curP->depth = 1.0;
+        printf("depth=%.0f\n",(float)(int)curP->depth);
+        update_calc = true;
+        break;
+
+    case 'a':
+        curP->depth += 1;
+        printf("depth=%.0f\n",(float)(int)curP->depth);
+        update_calc = true;
+        break;
+
+    case 'A':
+        curP->depth *= 2;
+        printf("depth=%.0f\n",(float)(int)curP->depth);
+        update_calc = true;
+        break;
+
+    case 'h':
+    case 'H':
+        lights[curL] = L0;
+        lights[curL].C = cam.C;
+        lights[curL].Q = cam.Q;
+        lights[curL].M = cam.M;
+        cam_calculate(&lights[curL], windowWidth, windowHeight, renderDenominator);
+        update_lights = true;
+        update_render = true;
+        break;
+
+    case 'x':
+        curP->accum --;
+        if(curP->accum<1.0)
+            curP->accum = 1.0;
+        printf("accum=%d\n",curP->accum);
+        update_calc = true;
+        break;
+
+    case 'X':
+        curP->accum /= 2;
+        if(curP->accum<1.0)
+            curP->accum = 1.0;
+        printf("accum=%d\n",curP->accum);
+        update_calc = true;
+        break;
+
+    case 's':
+        curP->accum ++;
+        printf("accum=%d\n",curP->accum);
+        update_calc = true;
+        break;
+
+    case 'S':
+        curP->accum *= 2;
+        printf("accum=%d\n",curP->accum);
+        update_calc = true;
+        break;
+
+    case 'q':
+    case 'Q':
+        exit(0);
+
+    case '/':
+    case '?':
+        //        dumpLyapHeader(1);
+        break;
+
+    case '-':
+    case '_':
+        renderDenominator ++;
+        update_calc = true;
+        break;
+
+    case '+':
+    case '=':
+        if(renderDenominator>1) {
+            renderDenominator --;
+            update_calc = true;
+        }
+        else
+            renderDenominator = 1;
+        break;
+
+    case ' ': controlMode = MODE_ROTPAN; break;
+    }
 }
 
 /**
@@ -866,7 +1238,10 @@ void init_gl(int *argc, char **argv)
     glutCreateWindow(argv[0]);
 
     glutDisplayFunc(display);
-    //glutKeyboardFunc(keyboard);
+    glutSpaceballRotateFunc(glut_spaceball_rot);
+    glutSpaceballMotionFunc(glut_spaceball_pan);
+    glutSpaceballButtonFunc(glut_spaceball_but);
+    glutKeyboardFunc(glut_keyboard);
     glutReshapeFunc(reshape);
     glutIdleFunc(idle);
 

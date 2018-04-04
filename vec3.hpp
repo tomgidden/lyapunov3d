@@ -18,7 +18,7 @@ public:
 
     BOTH static T logf(T x)
     {
-        return std::logf(static_cast<T>(x));
+        return std::log(static_cast<T>(x));
     }
 
     BOTH static T sqrt(T x)
@@ -254,18 +254,48 @@ public:
             v = r * v * (1.0 - v);
         }
 
-        if(this->fabs(v-0.5) >= 1e-10 ) {
+        if(VEC3<T,T3>::fabs(v-0.5) >= 1e-10 ) {
             // Now calculate the value by running the iteration with accumulation
             for(n = 0; n < accum; n++) {
                 r = abc[*seqp++];
                 if(*seqp==-1) seqp = seq;
                 v = r * v * (1.0 - v);
                 r = r - 2.0 * r * v;
-                l += this->logf(r<0 ? -r : r);
+                l += VEC3<T,T3>::logf(r<0 ? -r : r);
             }
         }
 
         return l;
+    }
+
+    BOTH void spaceball_soften(T lim, T range, T scale)
+    {
+        this->set( (this->x <= -lim) ? scale * (this->x+lim)/(range-lim) :
+                   (this->x >=  lim) ? scale * (this->x-lim)/(range-lim) :
+                   0,
+
+                   (this->y <= -lim) ? scale * (this->y+lim)/(range-lim) :
+                   (this->y >=  lim) ? scale * (this->y-lim)/(range-lim) :
+                   0,
+
+                   (this->z <= -lim) ? scale * (this->z+lim)/(range-lim) :
+                   (this->z >=  lim) ? scale * (this->z-lim)/(range-lim) :
+                   0 );
+    }
+
+    BOTH VEC3<T,T3> spaceball_softened(T lim, T range, T scale)
+    {
+        return VEC3<T,T3>( (this->x <= -lim) ? scale * (this->x+lim)/(range-lim) :
+                           (this->x >=  lim) ? scale * (this->x-lim)/(range-lim) :
+                           0,
+
+                           (this->y <= -lim) ? scale * (this->y+lim)/(range-lim) :
+                           (this->y >=  lim) ? scale * (this->y-lim)/(range-lim) :
+                           0,
+
+                           (this->z <= -lim) ? scale * (this->z+lim)/(range-lim) :
+                           (this->z >=  lim) ? scale * (this->z-lim)/(range-lim) :
+                           0 );
     }
 };
 

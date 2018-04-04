@@ -1,5 +1,9 @@
 #include <cmath>
 
+#ifndef MAXFLOAT
+#  define MAXFLOAT	3.40282347e+38F
+#endif
+
 #ifndef __LYAP_QUAT_HPP__
 #define __LYAP_QUAT_HPP__
 
@@ -19,7 +23,7 @@ public:
 
     BOTH static T logf(T x)
     {
-        return std::logf(static_cast<T>(x));
+        return std::log(static_cast<T>(x));
     }
 
     BOTH static T sqrt(T x)

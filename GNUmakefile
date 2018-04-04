@@ -1,25 +1,23 @@
-#CFLAGS+=-Wall -W -std=gnu99 -g
-#CFLAGS+=-Wno-deprecated-declarations
-
-#CFLAGS+=-I/System/Library/Frameworks/OpenCL.framework/Versions/A/Headers/ -I/System/Library/Frameworks/OpenGL.framework/Versions/A/Headers/
-#LDFLAGS+=-framework OpenCL -framework GLUT -framework OpenGL
-
-#CFLAGS+=-I/Developer/NVIDIA/CUDA-9.1/samples/common/inc/
-#CFLAGS+=-I/usr/X11/include/libpng15
-#LDFLAGS+=-L/usr/X11/lib -lpng
-#LDFLAGS+=-lpng
-
-
 CUDA		?= /usr/local/cuda
 NVCC		= $(CUDA)/bin/nvcc
 NVCCFLAGS	= -I$(CUDA)/samples/common/inc/
-#NVCCFLAGS	+= --use_fast_math
-LIBS		= -Xlinker -framework,GLUT -Xlinker -framework,OpenGL
+NVCCFLAGS	+= --use_fast_math
+
+ifeq ($(TARGET_OS),darwin)
+  LIBS		= -Xlinker -framework,GLUT -Xlinker -framework,OpenGL
+else
+  LIBS += $(GLLINK)
+  LIBS += -lGL -lGLU -lX11 -lglut
+endif
+
 SRCS		= $(wildcard *.cu)
 BINS		= $(patsubst %.cu,%,$(SRCS))
 
 all: lyap_interactive
 #all: $(BINS)
+
+timeout:
+	echo 'N' | sudo tee /sys/kernel/debug/gpu.0/timeouts_enabled
 
 %: %.cu
 	$(NVCC) $(NVCCFLAGS) $(LIBS) $< -o $@
