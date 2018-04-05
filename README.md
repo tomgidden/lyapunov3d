@@ -8,13 +8,15 @@ to produce some interesting results. However, I got stuck in the mire of
 OpenGL and OpenCL support in OS X and Linux, rather than working on the
 algorithm itself -- the interesting bit.
 
-I won't say it's abandonware, but it's certainly not being maintained at
-this time.
+As of March 2018, I've started playing with it again, clearing it up,
+and converting from OpenCL to CUDA, and with the aim of getting it 
+working well on a Jetson TX2 to allow more experimentation.
 
-My pipedream is to separate the OpenCL-based code completely into a
+I think my goal should be to separate the calculation code completely into a
 networked worker, and an entirely separate GUI client that just consumes
 data produced by the worker(s); perhaps with a central manager node to
-mediate between the two.
+mediate between the two.  Perhaps things like MPI would be a good way to
+do this.
 
 ## IMPORTANT
 
@@ -44,7 +46,7 @@ to install the `glew` OpenGL library used by the interactive app, and the
 
 Then:
 ```
-    make interactive && ./interactive
+    make lyap_interactive && ./lyap_interactive
 ```
 
 and hope for the best. **I do not accept responsibility for data loss
@@ -65,5 +67,5 @@ I really do encourage interested parties to help tidy it up and take it
 forward, though.  I just don't want to be lost in the kerfuffle.
 
 So unless you arrange with me _in advance_ for it to be licensed
-differently, the code is **Copyright 2011-2017, Tom Gidden** and available
+differently, the code is **Copyright 2011-2018, Tom Gidden** and available
 under the terms of the GNU Public License version 3.
