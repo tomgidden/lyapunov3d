@@ -1,3 +1,5 @@
+// -*- mode: cuda; -*-
+
 #include <cmath>
 
 #ifndef __LYAP_VEC3_HPP__

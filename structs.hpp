@@ -1,6 +1,11 @@
+// -*- mode: cuda; -*-
+
 #include "vec3.hpp"
 #include "quat.hpp"
 #include "color.hpp"
+
+#ifndef __LYAP_STRUCTS_HPP__
+#define __LYAP_STRUCTS_HPP__
 
 typedef float Real;
 typedef float3 Real3;
@@ -65,3 +70,5 @@ typedef struct {
 typedef struct {
     unsigned char r, g, b, a;
 } RGBA;
+
+#endif

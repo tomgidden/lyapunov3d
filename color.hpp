@@ -1,3 +1,5 @@
+// -*- mode: cuda; -*-
+
 #include <cmath>
 
 #ifndef __LYAP_COLOR_HPP__
