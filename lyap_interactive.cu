@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -545,28 +546,116 @@ static void cleanup()
 #endif
 }
 
-static void render()
+static time_t tm;
+static unsigned int tmh, tms, tmm;
+
+static void timer_start()
 {
-    size_t numBytes;
+    tm = time(NULL);
+    tmh = tmm = tms = 0;
+}
 
-    // Map PBO to get CUDA device pointer
-    glut_map_pbo(&cudaRGBA, &numBytes);
+static void timer_stop()
+{
+    tmh = time(NULL) - tm;
+    tms = tmh % 60;
+    tmh /= 60;
+    tmm = tmh % 60;
+    tmh /= 60;
+}
 
-    // call CUDA kernel, writing results to PBO
-    //    for(int i = 0; i < passes; ++i) {
-    //        void *dummy;
-    kernel_calc_render<<<blocks, threads>>>(cudaRGBA, cudaPoints, cam, prm, cudaSeq, cudaLights, num_lights);
-    //        cudaMemcpyAsync(dummy, dummy, 1, cudaMemcpyDeviceToDevice);
-    //    }
+static void save_ppm()
+{
+    size_t numBytes = imageWidth * imageHeight * sizeof(RGBA);
 
-#ifdef DUMP_POINTS
-    int points_size = sizeof(LyapPoint) * imageWidth * imageHeight;
-    printf("Points size = %d\n", points_size);
+    char leaf[256];
+    char fn[256], fn2[256], nfn[256];
 
-    LyapPoint *myPoints = (LyapPoint *)malloc(points_size);
+    snprintf((char*)leaf, 255, "Render %ld %dx%d %s step=%d D=%g i=%d,%d d=%d j=%g r=%d ot=%g",
+             (unsigned long)tm,
+             imageWidth,
+             imageHeight,
+             sequence,
+             curP->stepMethod,
+             curP->d,
+             curP->settle,
+             curP->accum,
+             (unsigned int)curP->depth,
+             curP->jitter,
+             (unsigned int)curP->refine,
+             curP->opaqueThreshold);
+
+    snprintf((char*)fn, 255, "_%s.ppm", leaf);
+    snprintf((char*)fn2, 255, "%s time=%%dh%%02dm%%02ds.ppm", leaf);
+
+    FILE *f = fopen(fn, "w");
+    fprintf(f, "P3\n%d %d\n%d\n", imageWidth, imageHeight, 255);
+
+    RGBA *buf = (RGBA*)malloc(numBytes);
+    RGBA *ptr = buf;
+    checkCudaErrors(cudaMemcpy(buf, cudaRGBA, numBytes, cudaMemcpyDeviceToHost));
+
+    for (unsigned int i=imageWidth * imageHeight; i>0; i--, ptr++) {
+        fprintf(f, "%3d %3d %3d ", ptr->r, ptr->g, ptr->b);
+    }
+    fprintf(f, "\n");
+    fclose(f);
+
+    snprintf((char*)nfn, 255, (const char *)fn2, tmh, tmm, tms);
+    link(fn, nfn);
+    unlink(fn);
+
+    free(buf);
+}
+
+
+static void save_points()
+{
+    size_t numBytes = imageWidth * imageHeight * sizeof(LyapPoint);
+
+    char leaf[256];
+    char fn[256], fn2[256], nfn[256];
+
+    snprintf((char*)leaf, 255, "Points %ld %dx%d %s step=%d D=%g i=%d,%d d=%d j=%g r=%d ot=%g",
+             (unsigned long)tm,
+             imageWidth,
+             imageHeight,
+             sequence,
+             curP->stepMethod,
+             curP->d,
+             curP->settle,
+             curP->accum,
+             (unsigned int)curP->depth,
+             curP->jitter,
+             (unsigned int)curP->refine,
+             curP->opaqueThreshold);
+
+    snprintf((char*)fn, 255, "_%s.raw", leaf);
+    snprintf((char*)fn2, 255, "%s time=%%dh%%02dm%%02ds.raw", leaf);
+
+    FILE *f = fopen(fn, "w");
+
+    LyapPoint *buf = (LyapPoint*)malloc(numBytes);
+    checkCudaErrors(cudaMemcpy(buf, cudaPoints, numBytes, cudaMemcpyDeviceToHost ));
+    fwrite((const void *)buf, numBytes, 1, f);
+    fclose(f);
+
+    snprintf((char*)nfn, 255, (const char *)fn2, tmh, tmm, tms);
+    link(fn, nfn);
+    unlink(fn);
+
+    free(buf);
+}
+
+static void dump_points()
+{
+    size_t numBytes = sizeof(LyapPoint) * imageWidth * imageHeight;
+    printf("Points size = %ld\n", numBytes);
+
+    LyapPoint *myPoints = (LyapPoint *)malloc(numBytes);
     printf("malloc'ed %p.\n", myPoints);
 
-    checkCudaErrors(cudaMemcpy( myPoints, cudaPoints, points_size, cudaMemcpyDeviceToHost ));
+    checkCudaErrors(cudaMemcpy( myPoints, cudaPoints, numBytes, cudaMemcpyDeviceToHost ));
 
     LyapPoint *ptr = myPoints;
     for (int i=0; i<imageWidth * imageHeight; i++, ptr++) {
@@ -576,47 +665,39 @@ static void render()
                ptr->N.x, ptr->N.y, ptr->N.z);
     }
     free(myPoints);
+}
+
+static void render()
+{
+    size_t numBytes;
+
+    timer_start();
+
+    // Map PBO to get CUDA device pointer
+    glut_map_pbo(&cudaRGBA, &numBytes);
+
+    // call CUDA kernel, writing results to PBO
+    //    for(int i = 0; i < passes; ++i) {
+    kernel_calc_render<<<blocks, threads>>>(cudaRGBA, cudaPoints, cam, prm, cudaSeq, cudaLights, num_lights);
+    //    }
+
+    cudaDeviceSynchronize();
+
+    timer_stop();
+
+#ifdef DUMP_POINTS
+    dump_points();
 #endif
 
 #ifdef OUTPUT_PPM
-    char leaf[256], fn[266];
-    int fc = 0;
-
-    sprintf((char*)leaf, "Render %dx%d %s step=%d D=%g i=%d,%d d=%d j=%g r=%d ot=%g",
-            imageWidth,
-            imageHeight,
-            sequence,
-            curP->stepMethod,
-            curP->d,
-            curP->settle,
-            curP->accum,
-            (unsigned int)curP->depth,
-            curP->jitter,
-            (unsigned int)curP->refine,
-            curP->opaqueThreshold);
-    sprintf((char*)fn, "%s.ppm", leaf);
-
-    FILE *f;
-    while ( NULL != (f = fopen(fn, "r")) ) {
-        fclose(f);
-        sprintf((char*)fn, "%s (%d).ppm", leaf, ++fc);
-    }
-
-    f = fopen(fn, "w");
-    fprintf(f, "P3\n%d %d\n%d\n", imageWidth, imageHeight, 255);
-
-    RGBA *buf = (RGBA*)malloc(numBytes);
-    RGBA *ptr = buf;
-    checkCudaErrors(cudaMemcpy(buf, cudaRGBA, numBytes, cudaMemcpyDeviceToHost));
-
-    for (int i=0; i<numBytes; i++, ptr++) {
-        fprintf(f, "%3d %3d %3d ", ptr->r, ptr->g, ptr->b);
-    }
-    fprintf(f, "\n");
-    fclose(f);
-    free(buf);
-    cleanup();
+    save_ppm();
 #endif
+
+#ifdef OUTPUT_POINTS
+    save_points();
+#endif
+
+    cleanup();
 
     // Handle error
     getLastCudaError("kernel render failed");
