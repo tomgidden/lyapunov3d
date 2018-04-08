@@ -24,20 +24,18 @@
 #include <helper_functions.h>
 #include <helper_gl.h>
 
-#include "lyap.hpp"
+#include "kernel.hpp"
 #include "scene.hpp"
 #include "params.hpp"
 
-// Image and grid parameters
-unsigned int imageWidth = 256, imageHeight = 256;
-const unsigned int blockSize = 16;
-const dim3 blocks(imageWidth / blockSize, imageHeight / blockSize);
-const dim3 threads(blockSize, blockSize);
-unsigned int windowWidth = imageWidth, windowHeight = imageHeight;
-unsigned int renderDenominator = 1;
+static unsigned int imageWidth = 2048, imageHeight = 2048;
 
 // Control
 static bool dominant = false;
+
+unsigned int windowWidth;
+unsigned int windowHeight;
+unsigned int renderDenominator = 1;
 
 static enum {
   MODE_LOCK,
@@ -59,15 +57,18 @@ static bool update_lights = true;
 static bool update_cam = true;
 
 
-LyapParams *curP = &prm;
-LyapCam *curC = &cam;
-unsigned int curL = 0;
+// Image and grid parameters
+const unsigned int blockSize = 16;
+const dim3 blocks(imageWidth / blockSize, imageHeight / blockSize);
+const dim3 threads(blockSize, blockSize);
 
+static LyapParams *curP = &prm;
+static LyapCam *curC = &cam;
+static unsigned int curL = 0;
 
 // Data transfer of Pixel Buffer Object between CUDA and GL
-GLuint glPBO;
+static GLuint glPBO;
 struct cudaGraphicsResource *cudaPBO;
-// A simple semaphore to indicate whether the PBO has been mapped or not
 volatile int cudaPBO_map_count = 0;
 
 #if USE_LMINMAX
@@ -91,20 +92,7 @@ RGBA *cudaRGBA;
 Int *cudaSeq;
 
 
-
-void quit()
-{
-#if defined(__APPLE__) || defined(MACOSX)
-    glutDestroyWindow(glutGetWindow());
-    exit(EXIT_SUCCESS);
-    return;
-#else
-    glutDestroyWindow(glutGetWindow());
-    return;
-#endif
-}
-
-void cuda_load_sequence(unsigned char *seqStr)
+static void cuda_load_sequence(unsigned char *seqStr)
 {
     size_t actual_length;
     Int *seq;
@@ -117,7 +105,7 @@ void cuda_load_sequence(unsigned char *seqStr)
     free(seq);
 }
 
-void init_scene()
+static void init_scene()
 {
     params_init();
 
@@ -130,7 +118,7 @@ void init_scene()
     update_cam = true;
 }
 
-void update_scene()
+static void update_scene()
 {
     if (update_lights) {
         scene_lights_recalculate(lights, num_lights);
@@ -140,91 +128,11 @@ void update_scene()
     }
 
     if (update_cam) {
-        scene_cam_recalculate(&cam, windowWidth, windowHeight, renderDenominator);
+        scene_cam_recalculate(&cam, imageWidth, imageHeight, renderDenominator);
     }
 }
 
-
-/**
- * Perform render step in CUDA, and write results to PBO
- */
-void render()
-{
-    size_t num_bytes;
-
-    // Map PBO to get CUDA device pointer
-    cudaPBO_map_count++;
-    checkCudaErrors(cudaGraphicsMapResources(1, &cudaPBO, 0));
-    checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void **)&cudaRGBA, &num_bytes, cudaPBO));
-
-    // call CUDA kernel, writing results to PBO
-    //    for(int i = 0; i < passes; ++i) {
-    //        void *dummy;
-    kernel_calc_render<<<blocks, threads>>>(cudaRGBA, cudaPoints, cam, prm, cudaSeq, cudaLights, num_lights);
-    //        cudaMemcpyAsync(dummy, dummy, 1, cudaMemcpyDeviceToDevice);
-    //    }
-
-    if (false) {
-        int points_size = sizeof(LyapPoint) * imageWidth * imageHeight;
-        printf("Points size = %d\n", points_size);
-
-        LyapPoint *myPoints = (LyapPoint *)malloc(points_size);
-        printf("malloc'ed %p.\n", myPoints);
-
-        checkCudaErrors(cudaMemcpy( myPoints, cudaPoints, points_size, cudaMemcpyDeviceToHost ));
-
-        LyapPoint *ptr = myPoints;
-        for (int i=0; i<imageWidth * imageHeight; i++, ptr++)
-            printf("%d:\t%f,%f,%f\t%f,%f,%f\n",
-                   points_size,
-                   ptr->P.x, ptr->P.y, ptr->P.z,
-                   ptr->N.x, ptr->N.y, ptr->N.z);
-
-        free(myPoints);
-        quit();
-    }
-
-    // Handle error
-    getLastCudaError("kernel render failed");
-
-    // Unmap cleanly
-    if (cudaPBO_map_count) {
-        checkCudaErrors(cudaGraphicsUnmapResources(1, &cudaPBO, 0));
-        cudaPBO_map_count--;
-    }
-}
-
-/**
- * Display the rendered data using GL.  This function is called automatically by GLUT
- */
-void display()
-{
-    // Perform any necessary updates
-    update_scene();
-
-    // Render the data
-    render();
-
-    // display results
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    // draw image from PBO
-    glDisable(GL_DEPTH_TEST);
-    glRasterPos2i(0, 0);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, glPBO);
-    glDrawPixels(imageWidth, imageHeight, GL_RGBA, GL_UNSIGNED_BYTE, 0);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
-
-    // Output the image to the screen
-    glutSwapBuffers();
-
-    glutReportErrors();
-}
-
-/**
- * Idle loop.
- */
-void idle()
+static void idle()
 {
     if(update_render || update_calc || update_lights || update_cam)
         glutPostRedisplay();
@@ -243,7 +151,6 @@ static void glut_spaceball_but(int button, int state)
         fprintf(stderr, "B%d\n", button);
     }
 }
-
 static void glut_spaceball_rot(int x, int y, int z)
 {
     if(controlMode==MODE_ROTPAN) {
@@ -399,8 +306,8 @@ static void glut_spaceball_pan(int x, int y, int z)
 }
 
 static void glut_keyboard(unsigned char k,
-                          int x __attribute__ ((unused)),
-                          int y __attribute__ ((unused)))
+                   int x __attribute__ ((unused)),
+                   int y __attribute__ ((unused)))
 {
     switch (k) {
     case '1':
@@ -556,7 +463,7 @@ static void glut_keyboard(unsigned char k,
  * Resize the window.  We're not going to do anything clever here for the
  * time being, eg. resize the buffers.
  */
-void reshape(int x, int y)
+static void reshape(int x, int y)
 {
     glViewport(0, 0, x, y);
 
@@ -568,29 +475,190 @@ void reshape(int x, int y)
     glOrtho(0.0, 1.0, 0.0, 1.0, 0.0, 1.0);
 }
 
-void cleanup()
+static int choose_cuda_device(int argc, char **argv, bool use_gl)
+{
+    int result = 0;
+
+    if (use_gl) {
+        result = findCudaGLDevice(argc, (const char **)argv);
+    }
+    else {
+        result = findCudaDevice(argc, (const char **)argv);
+    }
+
+    return result;
+}
+
+static void glut_init_buffer(unsigned int _imageWidth, unsigned int _imageHeight)
+{
+    if (glPBO) {
+        cudaGraphicsUnregisterResource(cudaPBO);
+        glDeleteBuffers(1, &glPBO);
+    };
+
+    // Create pixel buffer object
+    glGenBuffers(1, &glPBO);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, glPBO);
+    glBufferData(GL_PIXEL_UNPACK_BUFFER_ARB, _imageWidth * _imageHeight * sizeof(RGBA), 0, GL_STREAM_DRAW);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+
+    // Register this buffer object with CUDA.  We only need to do this once.
+    checkCudaErrors(cudaGraphicsGLRegisterBuffer(&cudaPBO, glPBO, cudaGraphicsMapFlagsWriteDiscard));
+}
+
+static void glut_map_pbo(RGBA **cudaRGBAp, size_t *numBytesP)
+{
+    // Map PBO to get CUDA device pointer
+    cudaPBO_map_count++;
+    checkCudaErrors(cudaGraphicsMapResources(1, &cudaPBO, 0));
+    checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void **)cudaRGBAp, numBytesP, cudaPBO));
+}
+
+static void glut_unmap_pbo()
+{
+    if (cudaPBO_map_count) {
+        checkCudaErrors(cudaGraphicsUnmapResources(1, &cudaPBO, 0));
+        cudaPBO_map_count--;
+    }
+}
+
+static void cleanup()
 {
     checkCudaErrors(cudaFree(cudaLights));
     checkCudaErrors(cudaFree(cudaPoints));
     checkCudaErrors(cudaFree(cudaSeq));
 
     // Unmap the PBO if it has been mapped
-    if (cudaPBO_map_count) {
-        checkCudaErrors(cudaGraphicsUnmapResources(1, &cudaPBO, 0));
-        cudaPBO_map_count--;
-    }
+    glut_unmap_pbo();
 
     // Unregister this buffer object from CUDA and from GL
     checkCudaErrors(cudaGraphicsUnregisterResource(cudaPBO));
     glDeleteBuffers(1, &glPBO);
+
+#if defined(__APPLE__) || defined(MACOSX)
+    glutDestroyWindow(glutGetWindow());
+    exit(EXIT_SUCCESS);
+    return;
+#else
+    glutDestroyWindow(glutGetWindow());
+    return;
+#endif
 }
 
-void init_gl(int *argc, char **argv)
+static void render()
+{
+    size_t numBytes;
+
+    // Map PBO to get CUDA device pointer
+    glut_map_pbo(&cudaRGBA, &numBytes);
+
+    // call CUDA kernel, writing results to PBO
+    //    for(int i = 0; i < passes; ++i) {
+    //        void *dummy;
+    kernel_calc_render<<<blocks, threads>>>(cudaRGBA, cudaPoints, cam, prm, cudaSeq, cudaLights, num_lights);
+    //        cudaMemcpyAsync(dummy, dummy, 1, cudaMemcpyDeviceToDevice);
+    //    }
+
+#ifdef DUMP_POINTS
+    int points_size = sizeof(LyapPoint) * imageWidth * imageHeight;
+    printf("Points size = %d\n", points_size);
+
+    LyapPoint *myPoints = (LyapPoint *)malloc(points_size);
+    printf("malloc'ed %p.\n", myPoints);
+
+    checkCudaErrors(cudaMemcpy( myPoints, cudaPoints, points_size, cudaMemcpyDeviceToHost ));
+
+    LyapPoint *ptr = myPoints;
+    for (int i=0; i<imageWidth * imageHeight; i++, ptr++) {
+        printf("%d:\t%f\t%f,%f,%f\t%f,%f,%f\n",
+               i, ptr->a,
+               ptr->P.x, ptr->P.y, ptr->P.z,
+               ptr->N.x, ptr->N.y, ptr->N.z);
+    }
+    free(myPoints);
+#endif
+
+#ifdef OUTPUT_PPM
+    char leaf[256], fn[266];
+    int fc = 0;
+
+    sprintf((char*)leaf, "Render %dx%d %s step=%d D=%g i=%d,%d d=%d j=%g r=%d ot=%g",
+            imageWidth,
+            imageHeight,
+            sequence,
+            curP->stepMethod,
+            curP->d,
+            curP->settle,
+            curP->accum,
+            (unsigned int)curP->depth,
+            curP->jitter,
+            (unsigned int)curP->refine,
+            curP->opaqueThreshold);
+    sprintf((char*)fn, "%s.ppm", leaf);
+
+    FILE *f;
+    while ( NULL != (f = fopen(fn, "r")) ) {
+        fclose(f);
+        sprintf((char*)fn, "%s (%d).ppm", leaf, ++fc);
+    }
+
+    f = fopen(fn, "w");
+    fprintf(f, "P3\n%d %d\n%d\n", imageWidth, imageHeight, 255);
+
+    RGBA *buf = (RGBA*)malloc(numBytes);
+    RGBA *ptr = buf;
+    checkCudaErrors(cudaMemcpy(buf, cudaRGBA, numBytes, cudaMemcpyDeviceToHost));
+
+    for (int i=0; i<numBytes; i++, ptr++) {
+        fprintf(f, "%3d %3d %3d ", ptr->r, ptr->g, ptr->b);
+    }
+    fprintf(f, "\n");
+    fclose(f);
+    free(buf);
+    cleanup();
+#endif
+
+    // Handle error
+    getLastCudaError("kernel render failed");
+
+    // Unmap cleanly
+    glut_unmap_pbo();
+}
+
+static void display()
+{
+    // Perform any necessary updates
+    update_scene();
+
+    // Render the data
+    render();
+
+    // display results
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // draw image from PBO
+    glDisable(GL_DEPTH_TEST);
+    glRasterPos2i(0, 0);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, glPBO);
+    glDrawPixels(imageWidth, imageHeight, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+
+    // Output the image to the screen
+    glutSwapBuffers();
+
+    glutReportErrors();
+}
+
+
+static void glut_init(int *argc, char **argv)
 {
     // initialize GLUT callback functions
     glutInit(argc, argv);
 
     glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);
+
+    windowWidth = imageWidth;
+    windowHeight = imageHeight;
 
     glutInitWindowSize(windowWidth, windowHeight);
 
@@ -610,40 +678,6 @@ void init_gl(int *argc, char **argv)
     }
 }
 
-void init_gl_buffer(unsigned int _imageWidth, unsigned int _imageHeight)
-{
-    if (glPBO) {
-        cudaGraphicsUnregisterResource(cudaPBO);
-        glDeleteBuffers(1, &glPBO);
-    };
-
-    // Create pixel buffer object
-    glGenBuffers(1, &glPBO);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, glPBO);
-    glBufferData(GL_PIXEL_UNPACK_BUFFER_ARB, _imageWidth * _imageHeight * sizeof(RGBA), 0, GL_STREAM_DRAW);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
-
-    // Register this buffer object with CUDA.  We only need to do this once.
-    checkCudaErrors(cudaGraphicsGLRegisterBuffer(&cudaPBO, glPBO, cudaGraphicsMapFlagsWriteDiscard));
-}
-
-/**
- * Find CUDA device
- */
-int choose_cuda_device(int argc, char **argv, bool use_gl)
-{
-    int result = 0;
-
-    if (use_gl) {
-        result = findCudaGLDevice(argc, (const char **)argv);
-    }
-    else {
-        result = findCudaDevice(argc, (const char **)argv);
-    }
-
-    return result;
-}
-
 int main(int argc, char **argv)
 {
 #if defined(__linux__)
@@ -657,10 +691,10 @@ int main(int argc, char **argv)
     // First initialize OpenGL context, so we can properly set the GL for
     // CUDA.  This is necessary in order to achieve optimal performance
     // with OpenGL/CUDA interop.
-    init_gl(&argc, argv);
+    glut_init(&argc, argv);
 
     // Create GL/CUDA interop buffer
-    init_gl_buffer(imageWidth, imageHeight);
+    glut_init_buffer(imageWidth, imageHeight);
 
     // Initialise scene
     init_scene();

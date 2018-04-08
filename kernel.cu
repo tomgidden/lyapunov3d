@@ -499,9 +499,9 @@ __device__ Real pointcalc(Real a, Real b, Real c, LyapParams prm, Int *seq)
 
 __global__ void kernel_calc_render(RGBA *rgba, LyapPoint *points, LyapCam cam, LyapParams prm, Int *seq, LyapLight *lights, Uint num_lights)
 {
-    const uint x = __umul24(blockIdx.x, blockDim.x) + threadIdx.x;
-    const uint y = __umul24(blockIdx.y, blockDim.y) + threadIdx.y;
-    const uint ind = x + __umul24(y, __umul24(gridDim.x, blockDim.x));
+    const Uint x = __umul24(blockIdx.x, blockDim.x) + threadIdx.x;
+    const Uint y = __umul24(blockIdx.y, blockDim.y) + threadIdx.y;
+    const Uint ind = x + __umul24(y, __umul24(gridDim.x, blockDim.x));
 
     // Perform ray-casting (ie. non-bouncing ray-tracing; it's hard enough
     // as it is) to find the hit point for this pixel, accumulating data
@@ -518,12 +518,12 @@ __global__ void kernel_calc_render(RGBA *rgba, LyapPoint *points, LyapCam cam, L
 
 __global__ void kernel_calc_volume(float *exps, LyapParams prm, Int *seq)
 {
-    const uint x = __umul24(blockIdx.x, blockDim.x) + threadIdx.x;
-    const uint y = __umul24(blockIdx.y, blockDim.y) + threadIdx.y;
-    const uint z = __umul24(blockIdx.z, blockDim.z) + threadIdx.z;
+    const Uint x = __umul24(blockIdx.x, blockDim.x) + threadIdx.x;
+    const Uint y = __umul24(blockIdx.y, blockDim.y) + threadIdx.y;
+    const Uint z = __umul24(blockIdx.z, blockDim.z) + threadIdx.z;
 
     //const uint ind = x + (y + z*gridDim.y*blockDim.y) * gridDim.x*blockDim.x;
-    const uint ind = x + __umul24(y + __umul24(z, __umul24(gridDim.y, blockDim.y)), __umul24(gridDim.x, blockDim.x));
+    const Uint ind = x + __umul24(y + __umul24(z, __umul24(gridDim.y, blockDim.y)), __umul24(gridDim.x, blockDim.x));
 
     const Real a = 4.0f * (float)x / (float)(gridDim.x * blockDim.x);
     const Real b = 4.0f * (float)y / (float)(gridDim.y * blockDim.y);

@@ -14,26 +14,27 @@ unsigned char *sequence;
 
 void params_init()
 {
-    prm.d = 1.85;
-    prm.settle = 10;
-    prm.accum = 200;
+    prm.d = 2.1;
+    prm.settle = 100;
+    prm.accum = 1000;
     prm.stepMethod = 2;
     prm.nearThreshold = -1.0;
     prm.nearMultiplier = 2.0;
-    prm.opaqueThreshold = -1.0;
-    prm.chaosThreshold = 0;
-    prm.depth = 256.0;
+    prm.opaqueThreshold = -1.125;
+    prm.chaosThreshold = -0.5;
+    prm.depth = 1024;
     prm.jitter = 0.5;
-    prm.refine = 32.0;
+    prm.refine = 32;
     prm.gradient = 0.01;
     prm.lMin = 0.0;
     prm.lMax = 4.0;
 
     sequence = (unsigned char *)"BCABA";
 
-    cam.C = Vec(3.51f, 3.5f, 3.5f);
-    cam.Q = Quat(-0.039979,0.891346,-0.299458,-0.337976);
-    cam.M = 0.5;
+    cam.C = Vec(4.01f, 4.0f, 4.0f);
+    cam.Q = Quat(0.820473,-0.339851,-0.175920,0.424708);
+    //    cam.Q = Quat(-0.039979,0.891346,-0.299458,-0.337976);
+    cam.M = 0.45;
 
     lights[0].C = Vec(5.0f, 7.0f, 3.0f);
     lights[0].Q = Quat(0.710595f, 0.282082f, -0.512168f, 0.391368f);
