@@ -5,7 +5,7 @@
 #include "color.hpp"
 #include "structs.hpp"
 
-#include "lyap.hpp"
+#include "kernel.hpp"
 
 #include <stdio.h>
 
@@ -27,8 +27,8 @@ __device__ Color shade(LyapPoint point, LyapCam cam, LyapLight *lights, Uint num
     Color color = Color();
 
     if (isnan(point.a)) {
-        color.x = 1;
-        color.w = 1;
+        color.x = 0;
+        color.w = 0;
         return color;
     }
 
@@ -168,7 +168,7 @@ __device__ Int raycast(LyapPoint *point, Uint sx, Uint sy, LyapCam cam, LyapPara
     Real a; // high-low alpha
     Real c; // chaos alpha
 
-    Real l;
+    Real l; // Lyapunov exponent
 
     bool near = false;
     Int i;
@@ -452,10 +452,6 @@ __device__ Int raycast(LyapPoint *point, Uint sx, Uint sy, LyapCam cam, LyapPara
     //
     // Find the difference for each axis, and normalize. The result is
     // pretty close.
-    //
-    // If anyone can work out how to differentiate the Lyapunov exponent
-    // as a vector, please do so: it'd be nice to avoid this approximation!
-    // (Hang on... that's not possible, is it?)
 
     Real mag = dt * prm.gradient;
     Vec Ps[6] = {P,P,P,P,P,P};
@@ -474,7 +470,6 @@ __device__ Int raycast(LyapPoint *point, Uint sx, Uint sy, LyapCam cam, LyapPara
     N.x = ls[1]-ls[0];
     N.y = ls[3]-ls[2];
     N.z = ls[5]-ls[4];
-
     N.normalize();
 
     // Okay, we've done it. Output the hit point, the normal, the exact
@@ -485,15 +480,28 @@ __device__ Int raycast(LyapPoint *point, Uint sx, Uint sy, LyapCam cam, LyapPara
     point->N = N;
     point->a = a;
     point->c = c;
+    point->l = l;
 
     return 0;
 }
 
+__device__ Real pointcalc(Real a, Real b, Real c, LyapParams prm, Int *seq)
+{
+    Vec P;  // Point under consideration
+
+    P.x = a;
+    P.y = b;
+    P.z = c;
+
+    // Calculate the exponent at the current point.
+    return lyap4d(P, prm.d, prm.settle, prm.accum, seq);
+}
+
 __global__ void kernel_calc_render(RGBA *rgba, LyapPoint *points, LyapCam cam, LyapParams prm, Int *seq, LyapLight *lights, Uint num_lights)
 {
-    const int x = blockDim.x * blockIdx.x + threadIdx.x;
-    const int y = blockDim.y * blockIdx.y + threadIdx.y;
-    const int ind = x + y * gridDim.x*blockDim.x;
+    const uint x = __umul24(blockIdx.x, blockDim.x) + threadIdx.x;
+    const uint y = __umul24(blockIdx.y, blockDim.y) + threadIdx.y;
+    const uint ind = x + __umul24(y, __umul24(gridDim.x, blockDim.x));
 
     // Perform ray-casting (ie. non-bouncing ray-tracing; it's hard enough
     // as it is) to find the hit point for this pixel, accumulating data
@@ -508,3 +516,18 @@ __global__ void kernel_calc_render(RGBA *rgba, LyapPoint *points, LyapCam cam, L
     color.to_rgba((unsigned char *)&rgba[ind]);
 }
 
+__global__ void kernel_calc_volume(float *exps, LyapParams prm, Int *seq)
+{
+    const uint x = __umul24(blockIdx.x, blockDim.x) + threadIdx.x;
+    const uint y = __umul24(blockIdx.y, blockDim.y) + threadIdx.y;
+    const uint z = __umul24(blockIdx.z, blockDim.z) + threadIdx.z;
+
+    //const uint ind = x + (y + z*gridDim.y*blockDim.y) * gridDim.x*blockDim.x;
+    const uint ind = x + __umul24(y + __umul24(z, __umul24(gridDim.y, blockDim.y)), __umul24(gridDim.x, blockDim.x));
+
+    const Real a = 4.0f * (float)x / (float)(gridDim.x * blockDim.x);
+    const Real b = 4.0f * (float)y / (float)(gridDim.y * blockDim.y);
+    const Real c = 4.0f * (float)z / (float)(gridDim.z * blockDim.z);
+
+    exps[ind] = pointcalc(a, b, c, prm, seq);
+}
