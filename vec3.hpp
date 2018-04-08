@@ -5,14 +5,13 @@
 #ifndef __LYAP_VEC3_HPP__
 #define __LYAP_VEC3_HPP__
 
-static const double VEC_EPSILON = 1e-6;
-
 #define BOTH __device__ __host__
+
+#define VEC_EPSILON (1e-12)
 
 template<class T, class T3> class VEC3 : public T3 {
 
 public:
-
     BOTH static T fabs(T x)
     {
         return x < 0 ? -x : x;
