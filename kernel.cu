@@ -153,7 +153,7 @@ __device__ Real lyap4d(Vec P, Real d, Uint settle, Uint accum, const Int *seq)
     return l/(Real)accum;
 }
 
-__device__ Int raycast(LyapPoint *point, Uint sx, Uint sy, LyapCam cam, LyapParams prm, Int *seq)
+__device__ Int raymarch(LyapPoint *point, Uint sx, Uint sy, LyapCam cam, LyapParams prm, Int *seq)
 {
     // Work out the direction vector: start at C (camera), and
     // find the point on the screen plane (in 3D)
@@ -503,10 +503,9 @@ __global__ void kernel_calc_render(RGBA *rgba, LyapPoint *points, LyapCam cam, L
     const Uint y = __umul24(blockIdx.y, blockDim.y) + threadIdx.y;
     const Uint ind = x + __umul24(y, __umul24(gridDim.x, blockDim.x));
 
-    // Perform ray-casting (ie. non-bouncing ray-tracing; it's hard enough
-    // as it is) to find the hit point for this pixel, accumulating data
-    // into the point structure.
-    Int ret = raycast(&(points[ind]), x, y, cam, prm, seq);
+    // Perform ray-marching (ie. stepping along the ray) to find the hit
+    // point for this pixel, accumulating data into the point structure.
+    Int ret = raymarch(&(points[ind]), x, y, cam, prm, seq);
 
     // Convert the abstract point structure -- position, surface normal,
     // chaos, etc. -- into a colour, using the lights provided.
