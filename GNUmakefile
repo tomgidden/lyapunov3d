@@ -27,7 +27,6 @@ all: $(BINS)
 
 
 lyap_interactive: lyap_interactive.o kernel.o scene.o params.o
-	date
 	$(NVCC) $(NVCCFLAGS) $(LIBS) $^ -o $@
 
 lyap_calculate: lyap_calculate.o kernel.o scene.o params.o

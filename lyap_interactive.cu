@@ -29,7 +29,8 @@
 #include "scene.hpp"
 #include "params.hpp"
 
-static unsigned int imageWidth = 2048, imageHeight = 2048;
+static unsigned int imageWidth = 4096, imageHeight = 4096;
+//static unsigned int imageWidth = 128, imageHeight = 128;
 
 // Control
 static bool dominant = false;
