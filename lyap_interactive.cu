@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <sys/stat.h>
 
 #if defined (__APPLE__) || defined(MACOSX)
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -29,7 +30,7 @@
 #include "scene.hpp"
 #include "params.hpp"
 
-static unsigned int imageWidth = 4096, imageHeight = 4096;
+static unsigned int imageWidth = default_imageWidth, imageHeight = default_imageHeight;
 //static unsigned int imageWidth = 128, imageHeight = 128;
 
 // Control
@@ -40,17 +41,17 @@ unsigned int windowHeight;
 unsigned int renderDenominator = 1;
 
 static enum {
-  MODE_LOCK,
-  MODE_ROTPAN,
-  MODE_MAG,
-  MODE_NTHRESH,
-  MODE_OTHRESH,
-  MODE_CTHRESH,
-  MODE_D,
-  MODE_JITTER,
-  MODE_L_PAN,
-  MODE_L_RANGE,
-  MODE_L_COLOR
+    MODE_LOCK,
+    MODE_ROTPAN,
+    MODE_MAG,
+    MODE_NTHRESH,
+    MODE_OTHRESH,
+    MODE_CTHRESH,
+    MODE_D,
+    MODE_JITTER,
+    MODE_L_PAN,
+    MODE_L_RANGE,
+    MODE_L_COLOR
 } controlMode = MODE_ROTPAN;
 
 static bool update_calc = true;
@@ -308,8 +309,8 @@ static void glut_spaceball_pan(int x, int y, int z)
 }
 
 static void glut_keyboard(unsigned char k,
-                   int x __attribute__ ((unused)),
-                   int y __attribute__ ((unused)))
+                          int x __attribute__ ((unused)),
+                          int y __attribute__ ((unused)))
 {
     switch (k) {
     case '1':
@@ -526,9 +527,9 @@ static void glut_unmap_pbo()
 
 static void cleanup()
 {
-    checkCudaErrors(cudaFree(cudaLights));
-    checkCudaErrors(cudaFree(cudaPoints));
-    checkCudaErrors(cudaFree(cudaSeq));
+    if (cudaLights) checkCudaErrors(cudaFree(cudaLights));
+    if (cudaPoints) checkCudaErrors(cudaFree(cudaPoints));
+    if (cudaSeq)    checkCudaErrors(cudaFree(cudaSeq));
 
     // Unmap the PBO if it has been mapped
     glut_unmap_pbo();
@@ -565,6 +566,7 @@ static void timer_stop()
     tmh /= 60;
 }
 
+#ifdef OUTPUT_PPM
 static void save_ppm()
 {
     size_t numBytes = imageWidth * imageHeight * sizeof(RGBA);
@@ -572,11 +574,12 @@ static void save_ppm()
     char leaf[256];
     char fn[256], fn2[256], nfn[256];
 
-    snprintf((char*)leaf, 255, "Render %ld %dx%d %s step=%d D=%g i=%d,%d d=%d j=%g r=%d ot=%g",
+    snprintf((char*)leaf, 255, "Render_%ld_%dx%d_%s_cx=%.8g_cy=%.8g_cz=%.8g_step=%d_D=%g_i=%d,%d_d=%d_j=%g_r=%d_ot=%g",
              (unsigned long)tm,
              imageWidth,
              imageHeight,
              sequence,
+             curC->C.x, curC->C.y, curC->C.z,
              curP->stepMethod,
              curP->d,
              curP->settle,
@@ -587,7 +590,7 @@ static void save_ppm()
              curP->opaqueThreshold);
 
     snprintf((char*)fn, 255, "_%s.ppm", leaf);
-    snprintf((char*)fn2, 255, "%s time=%%dh%%02dm%%02ds.ppm", leaf);
+    snprintf((char*)fn2, 255, "%s_time=%%dh%%02dm%%02ds.ppm", leaf);
 
     FILE *f = fopen(fn, "w");
     fprintf(f, "P3\n%d %d\n%d\n", imageWidth, imageHeight, 255);
@@ -608,8 +611,9 @@ static void save_ppm()
 
     free(buf);
 }
+#endif
 
-
+#ifdef OUTPUT_POINTS
 static void save_points()
 {
     size_t numBytes = imageWidth * imageHeight * sizeof(LyapPoint);
@@ -617,11 +621,12 @@ static void save_points()
     char leaf[256];
     char fn[256], fn2[256], nfn[256];
 
-    snprintf((char*)leaf, 255, "Points %ld %dx%d %s step=%d D=%g i=%d,%d d=%d j=%g r=%d ot=%g",
+    snprintf((char*)leaf, 255, "Points_%ld_%dx%d_%s_cx=%.8g_cy=%.8g_cz=%.8g_step=%d_D=%g_i=%d,%d_d=%d_j=%g_r=%d_ot=%g",
              (unsigned long)tm,
              imageWidth,
              imageHeight,
              sequence,
+             curC->C.x, curC->C.y, curC->C.z,
              curP->stepMethod,
              curP->d,
              curP->settle,
@@ -632,7 +637,7 @@ static void save_points()
              curP->opaqueThreshold);
 
     snprintf((char*)fn, 255, "_%s.raw", leaf);
-    snprintf((char*)fn2, 255, "%s time=%%dh%%02dm%%02ds.raw", leaf);
+    snprintf((char*)fn2, 255, "%s_time=%%dh%%02dm%%02ds.raw", leaf);
 
     FILE *f = fopen(fn, "w");
 
@@ -647,7 +652,9 @@ static void save_points()
 
     free(buf);
 }
+#endif
 
+#ifdef DUMP_POINTS
 static void dump_points()
 {
     size_t numBytes = sizeof(LyapPoint) * imageWidth * imageHeight;
@@ -667,10 +674,32 @@ static void dump_points()
     }
     free(myPoints);
 }
+#endif
+
+#ifdef SET_JETSON_CLOCKS
+#define JETSON_CLOCKS_FN "/usr/local/sbin/jetson_clocks"
+static void set_jetson_clocks(bool turbo)
+{
+    struct stat buf;
+    char *cmd;
+    if (!stat(JETSON_CLOCKS_FN, &buf)) {
+        size_t len = strlen(JETSON_CLOCKS_FN) + 32;
+        cmd = (char *)malloc(len);
+        snprintf(cmd, len, "%s %s", JETSON_CLOCKS_FN, turbo ? "running" : "finished");
+        system(cmd);
+        free(cmd);
+    }
+}
+#endif
+
 
 static void render()
 {
     size_t numBytes;
+
+#ifdef SET_JETSON_CLOCKS
+    set_jetson_clocks(true);
+#endif
 
     timer_start();
 
@@ -685,6 +714,10 @@ static void render()
     cudaDeviceSynchronize();
 
     timer_stop();
+
+#ifdef SET_JETSON_CLOCKS
+    set_jetson_clocks(false);
+#endif
 
 #ifdef DUMP_POINTS
     dump_points();

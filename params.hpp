@@ -20,6 +20,8 @@ extern unsigned char *sequence;
 
 const unsigned int MAX_LIGHTS = 16;
 
+extern unsigned int default_imageWidth, default_imageHeight;
+
 
 extern __host__ void params_init();
 

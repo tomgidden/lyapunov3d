@@ -9,6 +9,7 @@ NVCCFLAGS	+= --use_fast_math
 #NVCCFLAGS   += -DDOUBLE_REALS
 NVCCFLAGS	+= -DOUTPUT_PPM -DOUTPUT_POINTS
 #NVCCFLAGS	+= -DDUMP_POINTS
+NVCCFLAGS	+= -DSET_JETSON_CLOCKS
 
 ifeq ($(TARGET_OS),darwin)
   LIBS		= -Xlinker -framework,GLUT -Xlinker -framework,OpenGL
@@ -22,9 +23,14 @@ SRCS		= $(wildcard *.cu)
 BINS		= $(patsubst %.cu,%,$(MAINS))
 OBJS		= $(patsubst %.cu,%.o,$(SRCS))
 
+PPMS		= $(wildcard *.ppm)
+NPNGS		= $(patsubst %.ppm,%.png,$(PPMS))
+PNGS		= $(wildcard *.png)
+
 all: $(BINS)
 
-
+run: lyap_interactive
+	./$^
 
 lyap_interactive: lyap_interactive.o kernel.o scene.o params.o
 	$(NVCC) $(NVCCFLAGS) $(LIBS) $^ -o $@
@@ -45,3 +51,15 @@ kernel.o: kernel.cu vec3.hpp
 
 clean:
 	rm -rf $(BINS) $(OBJS) *.dSYM
+
+
+
+pngs: $(NPNGS)
+
+upload: $(PNGS)
+	rsync -v $^ vamp.lart.me:public_html/lyap2018/
+
+%.png: %.ppm
+	convert "$<" "$@"
+#	convert "$@" -crop 800x600+1800+1500 "$@_crop.png"
+
