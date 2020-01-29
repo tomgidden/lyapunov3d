@@ -1,7 +1,7 @@
 Multi-dimensional Lyapunov Fractals
 -----------------------------------
 
-This code accompanies the article [Exploring Lyapunov Space](https://medium.com/@gid/exploring-lyapunov-space-b810a8bed153).
+This code accompanies the article [Exploring Lyapunov Space](https://gidden.net/2017/03/09/exploring-lyapunov-space/).
 
 As the article explains, I worked on this code initially in 2011, managing
 to produce some interesting results. However, I got stuck in the mire of
