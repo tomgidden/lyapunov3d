@@ -1,3 +1,5 @@
+Also: quick-and-dirty 2D Lyapunov in the Terminal window:  https://gist.github.com/tomgidden/1d8145ed8576c99f70975d930895ca6a
+
 Multi-dimensional Lyapunov Fractals
 -----------------------------------
 
